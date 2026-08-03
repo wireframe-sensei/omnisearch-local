@@ -13,7 +13,12 @@ import {
   onFileChanged,
   type FileChangeEvent,
 } from "@/lib/ingest";
-import { indexDirectories, indexPath, type IndexFailure } from "@/lib/indexer";
+import {
+  indexDirectories,
+  indexPath,
+  resumePendingEmbeddings,
+  type IndexFailure,
+} from "@/lib/indexer";
 import { removeDocument, getIndexStats, type IndexStats } from "@/lib/vector-store";
 
 const MAX_RECENT_CHANGES = 5;
@@ -23,6 +28,10 @@ const MAX_FAILURES = 50;
 interface IndexProgress {
   done: number;
   total: number;
+  /** "files": extracting/embedding newly changed files. "embeddings": draining a backlog
+   * of chunks left over from an earlier, interrupted embedding pass - see
+   * `resumePendingEmbeddings`. */
+  phase: "files" | "embeddings";
 }
 
 interface IndexingContextValue {
@@ -37,6 +46,11 @@ interface IndexingContextValue {
   failures: IndexFailure[];
   addDirectories: (paths: string[]) => Promise<void>;
   removeDirectory: (path: string) => Promise<void>;
+  /** Re-runs indexing for the current directories on demand, rather than waiting for
+   * the directory list to change or the app to restart. `force` reprocesses every file
+   * regardless of mtime - see `indexDirectories`'s doc comment for why that's sometimes
+   * necessary. */
+  refreshIndex: (force?: boolean) => Promise<void>;
 }
 
 const IndexingContext = createContext<IndexingContextValue | null>(null);
@@ -78,32 +92,27 @@ export function IndexingProvider({ children }: { children: ReactNode }) {
     setFailures((prev) => prev.filter((f) => f.path !== path));
   }
 
-  // Re-scan, re-watch, and (re-)index for the app's lifetime whenever the directory list changes.
-  useEffect(() => {
-    if (loading) return;
-
-    let cancelled = false;
+  // Shared by the automatic pass below and the manual `refreshIndex` trigger, so
+  // "re-scan on directory change" and "user clicked refresh" can't drift apart.
+  async function runIndexPass(dirs: string[], force: boolean, signal: { cancelled: boolean }) {
     setScanning(true);
-    scanDirectories(directories)
-      .then((files) => {
-        if (!cancelled) setFileCount(files.length);
-      })
-      .finally(() => {
-        if (!cancelled) setScanning(false);
-      });
-
-    if (directories.length > 0) {
-      startWatching(directories);
-    } else {
-      stopWatching();
+    try {
+      const files = await scanDirectories(dirs);
+      if (!signal.cancelled) setFileCount(files.length);
+    } finally {
+      if (!signal.cancelled) setScanning(false);
     }
 
-    setIndexProgress(directories.length > 0 ? { done: 0, total: 0 } : null);
-    indexDirectories(directories, (done, total) => {
-      if (!cancelled) setIndexProgress({ done, total });
-    })
-      .then(({ attemptedPaths, failures: newFailures }) => {
-        if (cancelled) return;
+    setIndexProgress(dirs.length > 0 ? { done: 0, total: 0, phase: "files" } : null);
+    try {
+      const { attemptedPaths, failures: newFailures } = await indexDirectories(
+        dirs,
+        (done, total) => {
+          if (!signal.cancelled) setIndexProgress({ done, total, phase: "files" });
+        },
+        { force },
+      );
+      if (!signal.cancelled) {
         // Clear stale entries for anything reprocessed this run, then re-add only
         // what's still actually failing - a file that got fixed just drops off.
         const attempted = new Set(attemptedPaths);
@@ -111,19 +120,48 @@ export function IndexingProvider({ children }: { children: ReactNode }) {
           const kept = prev.filter((f) => !attempted.has(f.path));
           return [...newFailures, ...kept].slice(0, MAX_FAILURES);
         });
-      })
-      .catch((e) => console.error("Indexing failed", e))
-      .finally(() => {
-        if (!cancelled) {
-          setIndexProgress(null);
-          refreshIndexStats();
-        }
-      });
+      }
+
+      // Resume any chunks still missing an embedding, regardless of mtime - this is
+      // what lets a pass interrupted mid-embedding (app closed, process restarted)
+      // pick back up automatically instead of being silently skipped forever.
+      if (!signal.cancelled && dirs.length > 0) {
+        await resumePendingEmbeddings((done, total) => {
+          if (!signal.cancelled) setIndexProgress({ done, total, phase: "embeddings" });
+        });
+      }
+    } catch (e) {
+      console.error("Indexing failed", e);
+    } finally {
+      if (!signal.cancelled) {
+        setIndexProgress(null);
+        refreshIndexStats();
+      }
+    }
+  }
+
+  // Re-scan, re-watch, and (re-)index for the app's lifetime whenever the directory list changes.
+  useEffect(() => {
+    if (loading) return;
+
+    const signal = { cancelled: false };
+
+    if (directories.length > 0) {
+      startWatching(directories);
+    } else {
+      stopWatching();
+    }
+
+    runIndexPass(directories, false, signal);
 
     return () => {
-      cancelled = true;
+      signal.cancelled = true;
     };
   }, [directories, loading]);
+
+  async function refreshIndex(force = false) {
+    await runIndexPass(directories, force, { cancelled: false });
+  }
 
   useEffect(() => {
     const unlisten = onFileChanged((event) => {
@@ -175,6 +213,7 @@ export function IndexingProvider({ children }: { children: ReactNode }) {
         failures,
         addDirectories,
         removeDirectory,
+        refreshIndex,
       }}
     >
       {children}

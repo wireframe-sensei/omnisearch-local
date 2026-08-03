@@ -38,6 +38,14 @@ pub struct DocumentMtime {
     pub modified_ms: i64,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PendingChunk {
+    pub path: String,
+    pub chunk_index: i64,
+    pub text: String,
+}
+
 /// Schema is versioned via `PRAGMA user_version` so an existing local database (from
 /// before embeddings were nullable) gets migrated in place instead of silently keeping
 /// its old, incompatible constraints.
@@ -284,6 +292,34 @@ pub fn get_indexed_mtimes_cmd(db: tauri::State<Db>) -> Result<Vec<DocumentMtime>
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
 }
 
+/// Chunks still missing an embedding, regardless of when their text was stored - unlike
+/// the mtime-based comparison the frontend uses to decide which *files* to reprocess,
+/// this is what lets an interrupted embedding pass (app closed, process restarted) pick
+/// back up where it left off instead of being silently skipped forever. `ORDER BY id`
+/// gives simple, stable paging: since already-embedded rows drop out of the `WHERE`
+/// clause, repeated calls naturally advance without needing an explicit cursor. Read-only,
+/// so this runs on `ReadDb` rather than the writer `Db`.
+#[tauri::command]
+pub fn get_chunks_pending_embedding_cmd(
+    db: tauri::State<ReadDb>,
+    limit: i64,
+) -> Result<Vec<PendingChunk>, String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let mut stmt = conn
+        .prepare("SELECT path, chunk_index, text FROM chunks WHERE embedding IS NULL ORDER BY id LIMIT ?1")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![limit], |r| {
+            Ok(PendingChunk {
+                path: r.get(0)?,
+                chunk_index: r.get(1)?,
+                text: r.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,6 +396,79 @@ mod tests {
             .unwrap();
         assert_eq!(decode_blob(&embedding), vec![1.0, 2.0]);
         assert_eq!(dim, 2);
+    }
+
+    /// Inserts a document with a single chunk, embedding it if `embedding` is `Some`.
+    fn insert_chunk_with_optional_embedding(
+        conn: &Connection,
+        path: &str,
+        chunk_index: i64,
+        text: &str,
+        embedding: Option<&[f32]>,
+    ) {
+        conn.execute(
+            "INSERT INTO documents (path, modified_ms) VALUES (?1, 0)
+             ON CONFLICT(path) DO NOTHING",
+            params![path],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chunks (path, chunk_index, text) VALUES (?1, ?2, ?3)",
+            params![path, chunk_index, text],
+        )
+        .unwrap();
+        if let Some(e) = embedding {
+            conn.execute(
+                "UPDATE chunks SET embedding = ?1, dim = ?2 WHERE path = ?3 AND chunk_index = ?4",
+                params![embedding_to_blob(e), e.len() as i64, path, chunk_index],
+            )
+            .unwrap();
+        }
+    }
+
+    /// Simulates what get_chunks_pending_embedding_cmd does internally, without the
+    /// State wrapper - same convention as the other command tests in this module.
+    fn pending_embedding_texts(conn: &Connection, limit: i64) -> Vec<String> {
+        let mut stmt = conn
+            .prepare(
+                "SELECT text FROM chunks WHERE embedding IS NULL ORDER BY id LIMIT ?1",
+            )
+            .unwrap();
+        stmt.query_map(params![limit], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn pending_embedding_query_returns_only_unembedded_chunks_in_order() {
+        let conn = test_db();
+        insert_chunk_with_optional_embedding(&conn, "/tmp/a.txt", 0, "already embedded", Some(&[1.0]));
+        insert_chunk_with_optional_embedding(&conn, "/tmp/b.txt", 0, "pending one", None);
+        insert_chunk_with_optional_embedding(&conn, "/tmp/c.txt", 0, "pending two", None);
+
+        let pending = pending_embedding_texts(&conn, 10);
+        assert_eq!(pending, vec!["pending one", "pending two"]);
+    }
+
+    #[test]
+    fn pending_embedding_query_respects_limit() {
+        let conn = test_db();
+        for i in 0..5 {
+            insert_chunk_with_optional_embedding(&conn, &format!("/tmp/{i}.txt"), 0, "pending", None);
+        }
+
+        let pending = pending_embedding_texts(&conn, 2);
+        assert_eq!(pending.len(), 2);
+    }
+
+    #[test]
+    fn pending_embedding_query_is_empty_once_everything_is_embedded() {
+        let conn = test_db();
+        insert_chunk_with_optional_embedding(&conn, "/tmp/a.txt", 0, "done", Some(&[1.0]));
+
+        let pending = pending_embedding_texts(&conn, 10);
+        assert!(pending.is_empty());
     }
 
     #[test]

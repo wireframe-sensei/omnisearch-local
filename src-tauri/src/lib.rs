@@ -111,6 +111,7 @@ pub fn run() {
             store::remove_document,
             store::get_index_stats_cmd,
             store::get_indexed_mtimes_cmd,
+            store::get_chunks_pending_embedding_cmd,
             hybrid_search::hybrid_search_cmd,
             ollama::check_ollama_available,
             ollama::list_ollama_models,

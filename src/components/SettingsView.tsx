@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { homeDir } from "@tauri-apps/api/path";
 import {
@@ -42,6 +42,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     failures,
     addDirectories,
     removeDirectory,
+    refreshIndex,
   } = useIndexing();
   const {
     available: ollamaAvailable,
@@ -52,6 +53,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     refreshing: ollamaRefreshing,
   } = useOllama();
   const [explanation, setExplanation] = useState<Explanation | null>(null);
+  const [confirmingRebuild, setConfirmingRebuild] = useState(false);
+  const rebuildConfirmTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Settings is exactly where a newly-pulled model would need to show up, so
   // re-check every time this view opens rather than relying on stale app-launch state.
@@ -65,6 +68,28 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       cancelOllamaAnswer().catch(() => {});
     };
   }, []);
+
+  // Clear a pending rebuild confirmation on unmount so the timeout doesn't fire against
+  // an unmounted component.
+  useEffect(() => {
+    return () => {
+      if (rebuildConfirmTimeout.current) clearTimeout(rebuildConfirmTimeout.current);
+    };
+  }, []);
+
+  // Two-click confirm rather than a modal: forcing a full rebuild re-embeds every file
+  // regardless of whether it changed, which can take a while on a large index, so it
+  // shouldn't be a single accidental click away.
+  function handleRebuildClick() {
+    if (confirmingRebuild) {
+      if (rebuildConfirmTimeout.current) clearTimeout(rebuildConfirmTimeout.current);
+      setConfirmingRebuild(false);
+      refreshIndex(true);
+      return;
+    }
+    setConfirmingRebuild(true);
+    rebuildConfirmTimeout.current = setTimeout(() => setConfirmingRebuild(false), 4000);
+  }
 
   async function handleExplain(failure: IndexFailure) {
     if (!selectedModel) return;
@@ -123,28 +148,58 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       <div className="flex-1 overflow-y-auto p-4">
         {!loading && directories.length > 0 && (
           <div className="mb-3 space-y-1">
-            <p className="text-xs text-muted-foreground">
-              {scanning
-                ? "Scanning…"
-                : `${fileCount ?? 0} file${fileCount === 1 ? "" : "s"} found across ${
-                    directories.length
-                  } folder${directories.length === 1 ? "" : "s"}`}
-            </p>
+            <div className="flex items-center gap-1.5">
+              <p className="text-xs text-muted-foreground">
+                {scanning
+                  ? "Scanning…"
+                  : `${fileCount ?? 0} file${fileCount === 1 ? "" : "s"} found across ${
+                      directories.length
+                    } folder${directories.length === 1 ? "" : "s"}`}
+              </p>
+              <button
+                type="button"
+                onClick={() => refreshIndex()}
+                disabled={indexProgress !== null}
+                aria-label="Refresh index"
+                title="Rescan now for changes the file watcher may have missed"
+                className="ml-auto rounded p-0.5 hover:bg-accent disabled:opacity-50"
+              >
+                <RefreshCw className={`size-3.5 ${indexProgress !== null ? "animate-spin" : ""}`} />
+              </button>
+            </div>
             {indexProgress && (
               <p className="text-xs text-muted-foreground">
-                {indexProgress.total > 0
-                  ? `Indexing ${indexProgress.done}/${indexProgress.total} files…`
-                  : "Preparing local embedding model (first run downloads it once)…"}
+                {indexProgress.phase === "files"
+                  ? indexProgress.total > 0
+                    ? `Indexing ${indexProgress.done}/${indexProgress.total} files…`
+                    : "Preparing local embedding model (first run downloads it once)…"
+                  : `Embedding ${indexProgress.done}/${indexProgress.total} pending chunks…`}
               </p>
             )}
             {!indexProgress && indexStats && (
               <p className="text-xs text-muted-foreground">
                 {indexStats.embeddedChunkCount === indexStats.chunkCount
                   ? `${indexStats.chunkCount} chunk${indexStats.chunkCount === 1 ? "" : "s"} embedded`
-                  : `${indexStats.embeddedChunkCount}/${indexStats.chunkCount} chunks embedded`}{" "}
+                  : `${indexStats.embeddedChunkCount}/${indexStats.chunkCount} chunks embedded so far`}{" "}
                 across {indexStats.documentCount} document
                 {indexStats.documentCount === 1 ? "" : "s"}
               </p>
+            )}
+            {!indexProgress && (
+              <button
+                type="button"
+                onClick={handleRebuildClick}
+                title="Reprocess every file from scratch, even ones that haven't changed - use if you fixed an indexing bug or the index seems stale"
+                className={`text-xs underline decoration-dotted ${
+                  confirmingRebuild
+                    ? "text-destructive"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                {confirmingRebuild
+                  ? "Click again to reprocess every file (may take a while)"
+                  : "Rebuild index from scratch"}
+              </button>
             )}
           </div>
         )}

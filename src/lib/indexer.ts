@@ -6,8 +6,14 @@ import {
   updateChunkEmbeddings,
   removeDocument,
   getIndexedMtimes,
+  getIndexStats,
+  getChunksPendingEmbedding,
   type ChunkEmbeddingInput,
 } from "@/lib/vector-store";
+
+/** Bounds IPC payload size and memory per round-trip when draining a large backlog of
+ * chunks still missing an embedding - see `resumePendingEmbeddings`. */
+const PENDING_EMBED_BATCH_SIZE = 500;
 
 export interface IndexFailure {
   path: string;
@@ -61,6 +67,60 @@ async function embedFileChunks(path: string, chunks: TextChunk[]): Promise<void>
   await updateChunkEmbeddings(path, inputs);
 }
 
+interface FlatChunk {
+  path: string;
+  chunkIndex: number;
+  text: string;
+}
+
+/**
+ * Embeds a flat list of chunks - possibly spanning many files - concurrently across the
+ * whole worker pool, attaching each file's embeddings via `updateChunkEmbeddings` as soon
+ * as every one of that file's chunks in this batch has been attempted. Flattened (rather
+ * than processed file-by-file) so a file with few chunks never leaves workers idle while
+ * another file with many chunks is still going. A chunk that fails to embed is logged and
+ * skipped rather than failing the whole batch - it simply stays unembedded and gets picked
+ * up again by whatever finds pending chunks next (see `resumePendingEmbeddings`).
+ *
+ * Shared by `indexDirectories`'s Phase 2 (chunks just freshly extracted) and
+ * `resumePendingEmbeddings` (chunks left over from an earlier, interrupted run) so the
+ * two can't drift apart.
+ */
+async function embedAndAttachChunks(
+  chunks: FlatChunk[],
+  callbacks?: { onChunkDone?: () => void; onPathDone?: (path: string) => void },
+): Promise<void> {
+  const remainingByPath = new Map<string, number>();
+  const resultsByPath = new Map<string, ChunkEmbeddingInput[]>();
+  for (const chunk of chunks) {
+    remainingByPath.set(chunk.path, (remainingByPath.get(chunk.path) ?? 0) + 1);
+    if (!resultsByPath.has(chunk.path)) resultsByPath.set(chunk.path, []);
+  }
+
+  await Promise.all(
+    chunks.map(async (chunk) => {
+      try {
+        const embedding = await embedOne(chunk.text);
+        resultsByPath.get(chunk.path)!.push({ chunkIndex: chunk.chunkIndex, embedding });
+      } catch (e) {
+        console.error(`Failed to embed a chunk of ${chunk.path}`, e);
+      }
+      callbacks?.onChunkDone?.();
+
+      const remaining = remainingByPath.get(chunk.path)! - 1;
+      remainingByPath.set(chunk.path, remaining);
+      if (remaining === 0) {
+        try {
+          await updateChunkEmbeddings(chunk.path, resultsByPath.get(chunk.path)!);
+        } catch (e) {
+          console.error(`Failed to save embeddings for ${chunk.path}`, e);
+        }
+        callbacks?.onPathDone?.(chunk.path);
+      }
+    }),
+  );
+}
+
 export async function indexFile(file: IndexableFile): Promise<void> {
   const chunks = await storeFileText(file);
   if (chunks.length === 0) return;
@@ -93,10 +153,17 @@ export async function indexPath(path: string): Promise<void> {
  * out of) are reported in `failures` rather than just logged, so the UI can show the
  * user what didn't make it in. A file that never successfully indexes has no recorded
  * mtime, so it's retried - and re-reported here if it's still broken - on every run.
+ *
+ * `force` skips the mtime comparison and reprocesses every scanned file regardless of
+ * whether it changed. Normal runs are mtime-gated so cost scales with what actually
+ * changed, but that also means a file whose *extraction logic* changed (a bug fix, not
+ * the file itself) keeps its old, possibly-wrong stored text forever - `force` is the
+ * only way to pick that up.
  */
 export async function indexDirectories(
   directories: string[],
   onProgress?: (done: number, total: number) => void,
+  options?: { force?: boolean },
 ): Promise<IndexRunResult> {
   const [files, existingMtimes] = await Promise.all([
     scanDirectories(directories),
@@ -112,7 +179,9 @@ export async function indexDirectories(
     }
   }
 
-  const filesToProcess = files.filter((f) => mtimeMap.get(f.path) !== f.modifiedMs);
+  const filesToProcess = options?.force
+    ? files
+    : files.filter((f) => mtimeMap.get(f.path) !== f.modifiedMs);
   const attemptedPaths = filesToProcess.map((f) => f.path);
   const failures: IndexFailure[] = [];
 
@@ -137,37 +206,54 @@ export async function indexDirectories(
   // Phase 2: embed every pending file's chunks concurrently across the whole pool -
   // flattened across files (not per-file) so a file with few chunks never leaves
   // workers idle while another file with many chunks is still going.
-  const remainingByPath = new Map(pending.map((p) => [p.path, p.chunks.length]));
-  const resultsByPath = new Map<string, ChunkEmbeddingInput[]>(
-    pending.map((p) => [p.path, []]),
+  const allChunkTasks: FlatChunk[] = pending.flatMap((p) =>
+    p.chunks.map((chunk) => ({ path: p.path, chunkIndex: chunk.index, text: chunk.text })),
   );
 
-  const allChunkTasks = pending.flatMap((p) =>
-    p.chunks.map((chunk) => ({ path: p.path, chunk })),
-  );
-
-  await Promise.all(
-    allChunkTasks.map(async ({ path, chunk }) => {
-      try {
-        const embedding = await embedOne(chunk.text);
-        resultsByPath.get(path)!.push({ chunkIndex: chunk.index, embedding });
-      } catch (e) {
-        console.error(`Failed to embed a chunk of ${path}`, e);
-      }
-
-      const remaining = remainingByPath.get(path)! - 1;
-      remainingByPath.set(path, remaining);
-      if (remaining === 0) {
-        try {
-          await updateChunkEmbeddings(path, resultsByPath.get(path)!);
-        } catch (e) {
-          console.error(`Failed to save embeddings for ${path}`, e);
-        }
-        done += 1;
-        onProgress?.(done, files.length);
-      }
-    }),
-  );
+  await embedAndAttachChunks(allChunkTasks, {
+    onPathDone: () => {
+      done += 1;
+      onProgress?.(done, files.length);
+    },
+  });
 
   return { attemptedPaths, failures };
+}
+
+/**
+ * Embeds every chunk still missing an embedding, regardless of when its text was stored -
+ * independent of the mtime comparison `indexDirectories` uses to decide which *files* to
+ * reprocess. This is what lets an embedding pass interrupted mid-run (app closed, process
+ * restarted) resume where it left off on the next call, instead of those files being
+ * permanently marked "up to date" by their already-recorded mtime and never revisited.
+ *
+ * Streams through the backlog in bounded batches rather than fetching it all at once -
+ * necessary since a large, freshly-adopted home folder can leave hundreds of thousands of
+ * chunks pending. Safely interruptible and idempotent by construction: a chunk that fails
+ * (or that the app never gets to before closing) simply stays `embedding IS NULL`, so the
+ * same query naturally picks it up again next time - no separate checkpoint state needed.
+ */
+export async function resumePendingEmbeddings(
+  onProgress?: (done: number, total: number) => void,
+): Promise<void> {
+  const stats = await getIndexStats();
+  const total = stats.chunkCount - stats.embeddedChunkCount;
+  if (total <= 0) return;
+
+  let done = 0;
+  onProgress?.(done, total);
+
+  while (true) {
+    const batch = await getChunksPendingEmbedding(PENDING_EMBED_BATCH_SIZE);
+    if (batch.length === 0) break;
+
+    await embedAndAttachChunks(batch, {
+      onChunkDone: () => {
+        done += 1;
+        onProgress?.(Math.min(done, total), total);
+      },
+    });
+
+    if (batch.length < PENDING_EMBED_BATCH_SIZE) break;
+  }
 }

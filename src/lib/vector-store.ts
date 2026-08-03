@@ -21,6 +21,12 @@ export interface DocumentMtime {
   modifiedMs: number;
 }
 
+export interface PendingChunk {
+  path: string;
+  chunkIndex: number;
+  text: string;
+}
+
 /** Stores chunk text immediately - keyword (BM25) searchable right away, before embedding. */
 export function upsertDocumentChunksText(
   path: string,
@@ -48,4 +54,10 @@ export function getIndexStats(): Promise<IndexStats> {
 
 export function getIndexedMtimes(): Promise<DocumentMtime[]> {
   return invoke("get_indexed_mtimes_cmd");
+}
+
+/** Chunks still missing an embedding, regardless of when their text was stored - see
+ * `resumePendingEmbeddings` in indexer.ts for why this is independent of file mtime. */
+export function getChunksPendingEmbedding(limit: number): Promise<PendingChunk[]> {
+  return invoke("get_chunks_pending_embedding_cmd", { limit });
 }
