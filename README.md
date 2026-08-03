@@ -9,7 +9,6 @@ No cloud. No telemetry. No API keys. Your files never leave your machine.
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Windows%20%7C%20Linux-lightgrey)](#prerequisites)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%20v2-24C8DB)](https://tauri.app)
-[![CI](https://github.com/wireframe-sensei/omnisearch-local/actions/workflows/ci.yml/badge.svg)](https://github.com/wireframe-sensei/omnisearch-local/actions/workflows/ci.yml)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](CONTRIBUTING.md)
 
 <!-- TODO: add a screenshot or a short demo GIF of the search bar in action here — this is the single highest-impact thing you can add to this README. -->
