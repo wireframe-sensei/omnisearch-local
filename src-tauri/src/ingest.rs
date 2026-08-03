@@ -146,9 +146,57 @@ fn extract_plain_text(path: &Path) -> Result<String, String> {
     }
 }
 
+/// Extracts a PDF's text page-by-page (rather than pdf-extract's own whole-document
+/// `extract_text`), catching panics per page. pdf-extract panics — rather than
+/// returning `Err` — on a number of malformed-but-common real-world constructs (e.g.
+/// certain embedded Type3 fonts with missing width entries, unexpected encodings).
+/// Isolating each page means one bad page/font only loses that page's text instead of
+/// silently losing the entire document; an outer catch_unwind is still a safety net in
+/// case loading the document itself panics.
 fn extract_pdf_text(path: &Path) -> Result<String, String> {
-    pdf_extract::extract_text(path)
-        .map_err(|e| format!("failed to extract PDF text from {}: {e}", path.display()))
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        extract_pdf_text_page_by_page(path)
+    }));
+
+    match outcome {
+        Ok(result) => result,
+        Err(_) => Err(format!("PDF parser crashed while reading {}", path.display())),
+    }
+}
+
+fn extract_pdf_text_page_by_page(path: &Path) -> Result<String, String> {
+    let mut doc = pdf_extract::Document::load(path)
+        .map_err(|e| format!("failed to open PDF {}: {e}", path.display()))?;
+
+    if doc.is_encrypted() {
+        // Best-effort, matching pdf-extract's own `extract_text`: many "encrypted" PDFs
+        // in the wild just have an empty owner password and open fine with one.
+        let _ = doc.decrypt("");
+    }
+
+    let mut page_numbers: Vec<u32> = doc.get_pages().keys().copied().collect();
+    page_numbers.sort_unstable();
+
+    let mut combined = String::new();
+    for page_num in page_numbers {
+        let page_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut text = String::new();
+            let outcome = {
+                let mut output = pdf_extract::PlainTextOutput::new(&mut text);
+                pdf_extract::output_doc_page(&doc, &mut output, page_num)
+            };
+            outcome.map(|_| text)
+        }));
+
+        // A page that errors or panics is skipped — the rest of the document's text is
+        // still worth keeping rather than discarding everything over one bad page.
+        if let Ok(Ok(text)) = page_result {
+            combined.push_str(&text);
+            combined.push('\n');
+        }
+    }
+
+    Ok(combined)
 }
 
 fn extract_html_text(path: &Path) -> Result<String, String> {
@@ -442,6 +490,29 @@ mod tests {
         assert!(names.contains("main.rs"));
         assert!(names.contains("data.csv"));
         assert!(names.contains("config.yaml"));
+    }
+
+    #[test]
+    fn extract_pdf_text_returns_err_on_garbage_input_instead_of_crashing() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("not-a-real.pdf");
+        fs::write(&file_path, b"this is not a valid pdf file at all").unwrap();
+
+        let result = extract_document_text(file_path.to_str().unwrap());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn catch_unwind_converts_a_panic_into_an_err_without_crashing_the_process() {
+        // Exercises the same catch_unwind + map_err pattern extract_pdf_text uses, with a
+        // synthetic panic standing in for pdf-extract's internal panic on malformed PDFs —
+        // confirming the wrapping mechanism itself works in this test environment.
+        let result: Result<i32, String> = std::panic::catch_unwind(|| -> i32 {
+            panic!("simulated third-party crate panic");
+        })
+        .map_err(|_| "caught".to_string());
+
+        assert_eq!(result, Err("caught".to_string()));
     }
 
     #[test]
