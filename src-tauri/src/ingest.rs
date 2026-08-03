@@ -39,11 +39,19 @@ const SKIPPED_DIR_NAMES: &[&str] = &[
     "elm-stuff",
     "_build",
     "coverage",
-    // OS-internal folders: near-certain to appear directly under a home directory and
-    // never contain user documents worth indexing, so skip them to keep a "search my
-    // whole home folder" scan fast rather than crawling caches/app config for nothing.
+    // OS-internal folders. "Library"/"AppData" are near-certain to appear directly under
+    // a home directory (relevant to "Add Home Folder"); the rest live at a drive/volume
+    // root rather than inside a user's home directory, so they're not reachable via that
+    // shortcut, but are still worth excluding in case a folder higher up the tree (e.g. a
+    // drive root) is ever added directly.
     "Library",
     "AppData",
+    "Windows",
+    "Program Files",
+    "Program Files (x86)",
+    "ProgramData",
+    "System",
+    "Applications",
 ];
 
 #[derive(Debug, Clone, Serialize)]
@@ -85,6 +93,21 @@ pub fn is_supported(path: &Path) -> bool {
 
 fn is_hidden_or_noisy(entry_name: &str) -> bool {
     entry_name.starts_with('.') || SKIPPED_DIR_NAMES.contains(&entry_name)
+}
+
+/// True if any directory containing `path` is one `scan_directory` would prune (a
+/// dotfolder, or a name in [`SKIPPED_DIR_NAMES`]). `scan_directory` skips these by never
+/// descending into them via `filter_entry`, but the live file watcher (`watcher.rs`)
+/// can't do that - `notify` watches a directory tree at the OS level and has no
+/// per-subdirectory opt-out, so change events from inside a skipped directory still
+/// arrive and have to be filtered after the fact using this same rule instead. Only
+/// ancestor directories are checked, not the file's own name, matching `scan_directory`'s
+/// exact semantics (a top-level dotfile is kept; a dotfolder is not).
+pub(crate) fn path_is_within_skipped_dir(path: &Path) -> bool {
+    path.ancestors()
+        .skip(1)
+        .filter_map(|p| p.file_name())
+        .any(|name| is_hidden_or_noisy(&name.to_string_lossy()))
 }
 
 /// Recursively walks `root`, returning metadata for every file with a supported extension.
@@ -436,6 +459,32 @@ mod tests {
         assert!(names.contains("resume.txt"));
         assert!(!names.contains("skip.txt"));
         assert!(!names.contains("workspace.xml"));
+    }
+
+    #[test]
+    fn path_is_within_skipped_dir_matches_scan_directory_exactly() {
+        // Nested inside a skipped dependency folder - should be caught.
+        assert!(path_is_within_skipped_dir(Path::new(
+            "/Users/me/project/node_modules/pkg/index.js"
+        )));
+        // Nested inside a dotfolder - should be caught, same as scan_directory.
+        assert!(path_is_within_skipped_dir(Path::new("/Users/me/.git/HEAD")));
+        // Nested inside Library - the exact case the live watcher was leaking.
+        assert!(path_is_within_skipped_dir(Path::new(
+            "/Users/me/Library/Application Support/SomeApp/file.md"
+        )));
+        // Windows-style system folder.
+        assert!(path_is_within_skipped_dir(Path::new(
+            "C:/Program Files/SomeApp/notes.txt"
+        )));
+
+        // An ordinary file directly under an ordinary directory - not skipped.
+        assert!(!path_is_within_skipped_dir(Path::new(
+            "/Users/me/Documents/notes.txt"
+        )));
+        // A top-level dotFILE (not a dotfolder) - scan_directory's dir-only check would
+        // keep this too, so the path-level check must agree.
+        assert!(!path_is_within_skipped_dir(Path::new("/Users/me/.bashrc")));
     }
 
     #[test]

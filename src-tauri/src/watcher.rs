@@ -5,7 +5,7 @@ use std::sync::mpsc;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, State};
 
-use crate::ingest::is_supported;
+use crate::ingest::{is_supported, path_is_within_skipped_dir};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct FileChangeEvent {
@@ -59,7 +59,11 @@ pub fn start_watching(
                 continue;
             };
             for path in event.paths {
-                if !is_supported(&path) {
+                // `notify` watches the whole tree recursively at the OS level with no
+                // per-subdirectory opt-out, so events from inside e.g. Library or
+                // node_modules still arrive here even though the initial scan never
+                // touches them - filter them out the same way scan_directory would.
+                if !is_supported(&path) || path_is_within_skipped_dir(&path) {
                     continue;
                 }
                 let _ = emitter.emit(
