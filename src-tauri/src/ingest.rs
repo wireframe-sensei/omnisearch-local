@@ -31,6 +31,14 @@ const SKIPPED_DIR_NAMES: &[&str] = &[
     ".cache",
     "__pycache__",
     ".venv",
+    "venv",
+    "vendor",
+    "bower_components",
+    "Pods",
+    "DerivedData",
+    "elm-stuff",
+    "_build",
+    "coverage",
     // OS-internal folders: near-certain to appear directly under a home directory and
     // never contain user documents worth indexing, so skip them to keep a "search my
     // whole home folder" scan fast rather than crawling caches/app config for nothing.
@@ -403,6 +411,31 @@ mod tests {
         assert!(names.contains("nested.txt"));
         assert!(!names.contains("image.png"));
         assert!(!names.contains("skip.txt"));
+    }
+
+    #[test]
+    fn skips_other_ecosystem_dependency_and_build_folders() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        for noisy_name in ["vendor", "venv", "bower_components", "Pods", "DerivedData"] {
+            let noisy = root.join(noisy_name);
+            fs::create_dir(&noisy).unwrap();
+            fs::write(noisy.join("skip.txt"), "should be skipped").unwrap();
+        }
+
+        let hidden = root.join(".idea");
+        fs::create_dir(&hidden).unwrap();
+        fs::write(hidden.join("workspace.xml"), "should be skipped").unwrap();
+
+        fs::write(root.join("resume.txt"), "kept").unwrap();
+
+        let files = scan_directory(root.to_str().unwrap());
+        let names: HashSet<_> = files.iter().map(|f| f.file_name.clone()).collect();
+
+        assert!(names.contains("resume.txt"));
+        assert!(!names.contains("skip.txt"));
+        assert!(!names.contains("workspace.xml"));
     }
 
     #[test]
