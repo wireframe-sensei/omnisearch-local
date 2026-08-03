@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { homeDir } from "@tauri-apps/api/path";
 import {
@@ -9,13 +9,25 @@ import {
   House,
   RefreshCw,
   Sparkles,
+  TriangleAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { LoadingDots } from "@/components/LoadingDots";
 import { useIndexing } from "@/lib/indexing-context";
 import { useOllama } from "@/lib/ollama-context";
+import { cancelOllamaAnswer, streamOllamaAnswer } from "@/lib/ollama";
+import { buildErrorExplanationPrompt } from "@/lib/error-explainer";
+import type { IndexFailure } from "@/lib/indexer";
 
 interface SettingsViewProps {
   onBack: () => void;
+}
+
+interface Explanation {
+  path: string;
+  text: string;
+  loading: boolean;
+  error: string | null;
 }
 
 export function SettingsView({ onBack }: SettingsViewProps) {
@@ -27,6 +39,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     recentChanges,
     indexProgress,
     indexStats,
+    failures,
     addDirectories,
     removeDirectory,
   } = useIndexing();
@@ -38,12 +51,46 @@ export function SettingsView({ onBack }: SettingsViewProps) {
     refresh: refreshOllama,
     refreshing: ollamaRefreshing,
   } = useOllama();
+  const [explanation, setExplanation] = useState<Explanation | null>(null);
 
   // Settings is exactly where a newly-pulled model would need to show up, so
   // re-check every time this view opens rather than relying on stale app-launch state.
   useEffect(() => {
     refreshOllama();
   }, []);
+
+  // Cancel any in-flight explanation if the view unmounts mid-stream.
+  useEffect(() => {
+    return () => {
+      cancelOllamaAnswer().catch(() => {});
+    };
+  }, []);
+
+  async function handleExplain(failure: IndexFailure) {
+    if (!selectedModel) return;
+
+    await cancelOllamaAnswer().catch(() => {});
+    setExplanation({ path: failure.path, text: "", loading: true, error: null });
+
+    const prompt = buildErrorExplanationPrompt(failure.fileName, failure.message);
+    try {
+      await streamOllamaAnswer(selectedModel, prompt, (token) => {
+        setExplanation((prev) =>
+          prev && prev.path === failure.path ? { ...prev, text: prev.text + token } : prev,
+        );
+      });
+      setExplanation((prev) =>
+        prev && prev.path === failure.path ? { ...prev, loading: false } : prev,
+      );
+    } catch (e) {
+      setExplanation({
+        path: failure.path,
+        text: "",
+        loading: false,
+        error: e instanceof Error ? e.message : "Failed to reach Ollama.",
+      });
+    }
+  }
 
   async function handleAddDirectory() {
     const selected = await open({
@@ -148,6 +195,61 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                     {change.kind}
                   </span>
                   <span className="truncate">{change.path}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {failures.length > 0 && (
+          <div className="mt-4 border-t border-border pt-4">
+            <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+              <TriangleAlert className="size-3.5" />
+              Couldn't index {failures.length} file{failures.length === 1 ? "" : "s"}
+            </p>
+            <ul className="flex flex-col gap-1.5">
+              {failures.map((failure) => (
+                <li
+                  key={failure.path}
+                  className="rounded-md border border-border bg-card px-3 py-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span
+                      className="truncate text-sm font-medium text-foreground"
+                      title={failure.path}
+                    >
+                      {failure.fileName}
+                    </span>
+                    {selectedModel && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="shrink-0"
+                        onClick={() => handleExplain(failure)}
+                      >
+                        <Sparkles className="size-3" />
+                        Explain
+                      </Button>
+                    )}
+                  </div>
+                  <p
+                    className="mt-0.5 truncate text-xs text-muted-foreground"
+                    title={failure.message}
+                  >
+                    {failure.message}
+                  </p>
+                  {explanation?.path === failure.path && (
+                    <div className="mt-1.5 rounded-md bg-accent px-2 py-1.5 text-xs text-accent-foreground">
+                      {explanation.error ? (
+                        <span className="text-destructive">{explanation.error}</span>
+                      ) : (
+                        <>
+                          {explanation.text}
+                          {explanation.loading && <LoadingDots />}
+                        </>
+                      )}
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>

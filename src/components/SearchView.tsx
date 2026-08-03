@@ -4,6 +4,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Button } from "@/components/ui/button";
 import { FileIcon } from "@/components/FileIcon";
+import { LoadingDots } from "@/components/LoadingDots";
 import { useIndexing } from "@/lib/indexing-context";
 import { useOllama } from "@/lib/ollama-context";
 import { search as hybridSearch, type FileResult } from "@/lib/hybrid-search";
@@ -290,17 +291,6 @@ export function SearchView({ onOpenSettings }: SearchViewProps) {
         )}
       </div>
     </div>
-  );
-}
-
-/** Three staggered bouncing dots, shown while an AI answer is still streaming in. */
-function LoadingDots() {
-  return (
-    <span className="ml-1 inline-flex items-center gap-0.5 align-middle">
-      <span className="size-1 animate-bounce rounded-full bg-current [animation-delay:-0.3s]" />
-      <span className="size-1 animate-bounce rounded-full bg-current [animation-delay:-0.15s]" />
-      <span className="size-1 animate-bounce rounded-full bg-current" />
-    </span>
   );
 }
 

@@ -9,9 +9,26 @@ import {
   type ChunkEmbeddingInput,
 } from "@/lib/vector-store";
 
+export interface IndexFailure {
+  path: string;
+  fileName: string;
+  message: string;
+}
+
+export interface IndexRunResult {
+  /** Every path this run attempted to (re-)index, whether it succeeded or not — lets
+   * the caller clear stale failure entries for files that succeeded this time. */
+  attemptedPaths: string[];
+  failures: IndexFailure[];
+}
+
 function extensionOf(path: string): string {
   const idx = path.lastIndexOf(".");
   return idx === -1 ? "" : path.slice(idx + 1).toLowerCase();
+}
+
+function errorMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
 }
 
 /** Extracts, chunks, and stores a file's text — no embedding yet, so it's immediately
@@ -71,11 +88,16 @@ export async function indexPath(path: string): Promise<void> {
  * then embeddings for everything just stored are computed across a worker pool with
  * real cross-file parallelism, attaching to (and making semantically searchable) each
  * file as soon as its own chunks finish, rather than waiting for the whole scan.
+ *
+ * Files that fail extraction entirely (a file this whole app couldn't get any text
+ * out of) are reported in `failures` rather than just logged, so the UI can show the
+ * user what didn't make it in. A file that never successfully indexes has no recorded
+ * mtime, so it's retried — and re-reported here if it's still broken — on every run.
  */
 export async function indexDirectories(
   directories: string[],
   onProgress?: (done: number, total: number) => void,
-): Promise<void> {
+): Promise<IndexRunResult> {
   const [files, existingMtimes] = await Promise.all([
     scanDirectories(directories),
     getIndexedMtimes(),
@@ -91,6 +113,9 @@ export async function indexDirectories(
   }
 
   const filesToProcess = files.filter((f) => mtimeMap.get(f.path) !== f.modifiedMs);
+  const attemptedPaths = filesToProcess.map((f) => f.path);
+  const failures: IndexFailure[] = [];
+
   let done = files.length - filesToProcess.length;
   onProgress?.(done, files.length);
 
@@ -105,6 +130,7 @@ export async function indexDirectories(
       }
     } catch (e) {
       console.error(`Failed to extract ${file.path}`, e);
+      failures.push({ path: file.path, fileName: file.fileName, message: errorMessage(e) });
     }
   }
 
@@ -142,4 +168,6 @@ export async function indexDirectories(
       }
     }),
   );
+
+  return { attemptedPaths, failures };
 }
