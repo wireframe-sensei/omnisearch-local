@@ -52,9 +52,19 @@ pub fn run() {
 
             let app_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&app_dir)?;
-            let conn = rusqlite::Connection::open(app_dir.join("omnisearch.db"))?;
+            let db_path = app_dir.join("omnisearch.db");
+
+            let conn = rusqlite::Connection::open(&db_path)?;
             store::init_db(&conn)?;
             app.manage(store::Db(Mutex::new(conn)));
+
+            // A dedicated read-only connection for search, so it never queues behind an
+            // indexing write transaction on the connection above - see `store::ReadDb`.
+            let read_conn = rusqlite::Connection::open_with_flags(
+                &db_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+            )?;
+            app.manage(store::ReadDb(Mutex::new(read_conn)));
 
             // Non-fatal: another process (e.g. a still-running previous `tauri dev`
             // instance) can hold this exact combo. Failing here shouldn't take down

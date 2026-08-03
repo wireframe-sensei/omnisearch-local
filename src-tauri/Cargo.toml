@@ -38,6 +38,7 @@ futures-util = { version = "0.3.33", default-features = false, features = ["std"
 calamine = "0.36.1"
 zip = { version = "8.6.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 quick-xml = "0.41.0"
+rayon = "1.10.0"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

@@ -1,19 +1,31 @@
-use crate::store::{blob_to_embedding, dot, Db, SearchResult};
-use std::collections::HashMap;
+//! Keyword ranking runs against the `chunks_fts` FTS5 index (see `store::migrate_to_v2`)
+//! instead of re-tokenizing the whole corpus per query; semantic ranking streams the
+//! embedded chunk table in bounded batches, scored in parallel via rayon, merged into a
+//! fixed-size top-k heap. Neither pass loads chunk text - only the final, already-fused
+//! and truncated id list gets hydrated with text at the end.
 
-const BM25_K1: f32 = 1.5;
-const BM25_B: f32 = 0.75;
+use crate::store::{ReadDb, SearchResult};
+use rayon::prelude::*;
+use rusqlite::{params, Connection};
+use std::cmp::{Ordering, Reverse};
+use std::collections::{BinaryHeap, HashMap};
+
 /// Standard Reciprocal Rank Fusion damping constant (as used by Elasticsearch/TREC).
 const RRF_K: f32 = 60.0;
+/// Each ranking is capped to this many candidates before fusion - anything ranked below
+/// this contributes less than 1 / (60 + 201) ≈ 0.004 to an RRF score, so the cap costs
+/// negligible recall while bounding how much work every query does regardless of corpus
+/// size.
+const CANDIDATE_LIMIT: i64 = 200;
+/// Semantic scoring streams through the embedded chunk table this many rows at a time,
+/// rather than loading every embedding into memory at once (hundreds of megabytes on a
+/// large index).
+const SEMANTIC_BATCH_SIZE: i64 = 8192;
 
 struct ChunkRow {
-    id: i64,
     path: String,
     chunk_index: i64,
     text: String,
-    /// `None` until the background embedding step catches up - still keyword-searchable
-    /// via BM25 in the meantime, just absent from the semantic ranking.
-    embedding: Option<Vec<f32>>,
 }
 
 fn tokenize(text: &str) -> Vec<String> {
@@ -24,68 +36,131 @@ fn tokenize(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Ranks chunk ids by semantic similarity to the query embedding, best first. Chunks
-/// whose embedding hasn't been computed yet are excluded (they're only reachable via
-/// BM25 until then) rather than penalized with a fabricated low score.
-fn semantic_ranking(chunks: &[ChunkRow], query_embedding: &[f32]) -> Vec<i64> {
-    let mut scored: Vec<(i64, f32)> = chunks
-        .iter()
-        .filter_map(|c| c.embedding.as_ref().map(|e| (c.id, dot(query_embedding, e))))
-        .collect();
-    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
-    scored.into_iter().map(|(id, _)| id).collect()
-}
-
-/// Ranks chunk ids by BM25 score against the tokenized query, best first. Chunks that
-/// share no term with the query are excluded rather than ranked with a score of zero.
-fn bm25_ranking(chunks: &[ChunkRow], query_tokens: &[String]) -> Vec<i64> {
-    if chunks.is_empty() || query_tokens.is_empty() {
-        return Vec::new();
+/// Builds an FTS5 MATCH expression from already-tokenized query terms. Each token is
+/// quoted so FTS5's own operator syntax (AND/OR/NEAR/*/^/:) can never reach the parser -
+/// `tokenize` already strips everything but alphanumerics, so in practice there is
+/// nothing to escape, but quoting is cheap insurance against that invariant changing.
+/// Tokens are joined with OR (not FTS5's default AND) to match the previous hand-rolled
+/// BM25's any-term-overlap behavior. Only the last token gets a prefix operator, since in
+/// a live, debounced search box it's usually still being typed - earlier tokens stay
+/// exact so short words don't fan out into unrelated matches.
+fn build_match_expr(query_tokens: &[String]) -> Option<String> {
+    if query_tokens.is_empty() {
+        return None;
     }
-
-    let term_counts: Vec<HashMap<String, u32>> = chunks
+    let last = query_tokens.len() - 1;
+    let quoted: Vec<String> = query_tokens
         .iter()
-        .map(|c| {
-            let mut counts = HashMap::new();
-            for token in tokenize(&c.text) {
-                *counts.entry(token).or_insert(0) += 1;
+        .enumerate()
+        .map(|(i, token)| {
+            let escaped = token.replace('"', "\"\"");
+            if i == last {
+                format!("\"{escaped}\"*")
+            } else {
+                format!("\"{escaped}\"")
             }
-            counts
         })
         .collect();
+    Some(quoted.join(" OR "))
+}
 
-    let doc_lens: Vec<f32> = term_counts
-        .iter()
-        .map(|m| m.values().sum::<u32>() as f32)
+/// Ranks chunk ids by BM25 against `chunks_fts`, best first, via the inverted index
+/// SQLite maintains incrementally as chunks are written - no re-tokenization of the
+/// corpus per query. FTS5's `bm25()` returns more-negative-is-better, so the default
+/// ascending sort is already best-first.
+fn keyword_ranking(conn: &Connection, query_tokens: &[String], limit: i64) -> rusqlite::Result<Vec<i64>> {
+    let Some(match_expr) = build_match_expr(query_tokens) else {
+        return Ok(Vec::new());
+    };
+    let mut stmt = conn.prepare(
+        "SELECT rowid FROM chunks_fts WHERE chunks_fts MATCH ?1 ORDER BY bm25(chunks_fts) LIMIT ?2",
+    )?;
+    let ids = stmt
+        .query_map(params![match_expr, limit], |r| r.get(0))?
         .collect();
-    let avg_dl = doc_lens.iter().sum::<f32>() / doc_lens.len() as f32;
-    let n = chunks.len() as f32;
+    ids
+}
 
-    let mut idf: HashMap<&str, f32> = HashMap::new();
-    for token in query_tokens {
-        let df = term_counts.iter().filter(|m| m.contains_key(token)).count() as f32;
-        idf.insert(token.as_str(), ((n - df + 0.5) / (df + 0.5) + 1.0).ln());
+/// A chunk id paired with a semantic similarity score, ordered purely by score so it can
+/// sit in a [`BinaryHeap`] for bounded top-k selection.
+struct ScoredId(i64, f32);
+
+impl PartialEq for ScoredId {
+    fn eq(&self, other: &Self) -> bool {
+        self.1 == other.1
     }
+}
+impl Eq for ScoredId {}
+impl PartialOrd for ScoredId {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for ScoredId {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.1.total_cmp(&other.1)
+    }
+}
 
-    let mut scored: Vec<(i64, f32)> = Vec::new();
-    for (i, chunk) in chunks.iter().enumerate() {
-        let doc_len = doc_lens[i];
-        let mut score = 0.0f32;
-        for token in query_tokens {
-            let tf = *term_counts[i].get(token).unwrap_or(&0) as f32;
-            if tf == 0.0 {
-                continue;
+/// Embeddings are unit-normalized before storage, so a plain dot product equals cosine
+/// similarity. Computed directly off the little-endian f32 bytes rather than first
+/// deserializing into a `Vec<f32>`, since this runs once per chunk per query and the
+/// intermediate allocation would dominate at scale.
+fn dot_bytes(query: &[f32], blob: &[u8]) -> f32 {
+    blob.chunks_exact(4)
+        .zip(query)
+        .map(|(b, q)| f32::from_le_bytes([b[0], b[1], b[2], b[3]]) * *q)
+        .sum()
+}
+
+/// Ranks chunk ids by semantic similarity to the query embedding, best first. Streams
+/// through every embedded chunk in [`SEMANTIC_BATCH_SIZE`]-sized batches via keyset
+/// pagination on `id`, scoring each batch in parallel across cores via rayon and merging
+/// into a size-`limit` min-heap, so memory use and per-query work stay bounded regardless
+/// of corpus size. Chunks with no embedding yet (still in Phase 1 of indexing) are
+/// excluded by the query itself rather than penalized with a fabricated low score.
+fn semantic_top_k(conn: &Connection, query_embedding: &[f32], limit: usize) -> rusqlite::Result<Vec<i64>> {
+    let mut heap: BinaryHeap<Reverse<ScoredId>> = BinaryHeap::with_capacity(limit + 1);
+    let mut last_id = 0i64;
+
+    loop {
+        let mut stmt = conn.prepare_cached(
+            "SELECT id, embedding FROM chunks
+             WHERE embedding IS NOT NULL AND id > ?1
+             ORDER BY id LIMIT ?2",
+        )?;
+        let batch: Vec<(i64, Vec<u8>)> = stmt
+            .query_map(params![last_id, SEMANTIC_BATCH_SIZE], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })?
+            .collect::<Result<_, _>>()?;
+
+        if batch.is_empty() {
+            break;
+        }
+        let batch_len = batch.len();
+        last_id = batch[batch_len - 1].0;
+
+        let scored: Vec<ScoredId> = batch
+            .par_iter()
+            .map(|(id, blob)| ScoredId(*id, dot_bytes(query_embedding, blob)))
+            .collect();
+
+        for s in scored {
+            heap.push(Reverse(s));
+            if heap.len() > limit {
+                heap.pop();
             }
-            score += idf[token.as_str()] * (tf * (BM25_K1 + 1.0))
-                / (tf + BM25_K1 * (1.0 - BM25_B + BM25_B * doc_len / avg_dl));
         }
-        if score > 0.0 {
-            scored.push((chunk.id, score));
+
+        if batch_len < SEMANTIC_BATCH_SIZE as usize {
+            break;
         }
     }
 
-    scored.sort_by(|a, b| b.1.total_cmp(&a.1));
-    scored.into_iter().map(|(id, _)| id).collect()
+    let mut top: Vec<ScoredId> = heap.into_iter().map(|Reverse(s)| s).collect();
+    top.sort_by(|a, b| b.1.total_cmp(&a.1));
+    Ok(top.into_iter().map(|s| s.0).collect())
 }
 
 /// Combines multiple rankings of the same items into one score via Reciprocal Rank
@@ -101,49 +176,60 @@ fn reciprocal_rank_fusion(rankings: &[Vec<i64>]) -> HashMap<i64, f32> {
     fused
 }
 
+/// Fetches path/chunk_index/text for exactly the given ids. Called only after fusion and
+/// truncation to the final result count, so this touches a handful of rows rather than
+/// the whole corpus - unlike the old implementation, which loaded every chunk's text
+/// unconditionally on every query.
+fn hydrate(conn: &Connection, ids: &[i64]) -> rusqlite::Result<HashMap<i64, ChunkRow>> {
+    if ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let placeholders = vec!["?"; ids.len()].join(", ");
+    let sql = format!("SELECT id, path, chunk_index, text FROM chunks WHERE id IN ({placeholders})");
+    let mut stmt = conn.prepare(&sql)?;
+    let bind_params: Vec<&dyn rusqlite::ToSql> = ids.iter().map(|id| id as &dyn rusqlite::ToSql).collect();
+    let rows = stmt
+        .query_map(bind_params.as_slice(), |r| {
+            Ok((
+                r.get::<_, i64>(0)?,
+                ChunkRow {
+                    path: r.get(1)?,
+                    chunk_index: r.get(2)?,
+                    text: r.get(3)?,
+                },
+            ))
+        })?
+        .collect();
+    rows
+}
+
 #[tauri::command]
 pub fn hybrid_search_cmd(
-    db: tauri::State<Db>,
+    db: tauri::State<ReadDb>,
     query: String,
     query_embedding: Vec<f32>,
     limit: i64,
 ) -> Result<Vec<SearchResult>, String> {
     let conn = db.0.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare("SELECT id, path, chunk_index, text, embedding FROM chunks")
-        .map_err(|e| e.to_string())?;
-
-    let chunks: Vec<ChunkRow> = stmt
-        .query_map([], |r| {
-            let blob: Option<Vec<u8>> = r.get(4)?;
-            Ok(ChunkRow {
-                id: r.get(0)?,
-                path: r.get(1)?,
-                chunk_index: r.get(2)?,
-                text: r.get(3)?,
-                embedding: blob.map(|b| blob_to_embedding(&b)),
-            })
-        })
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
 
     let query_tokens = tokenize(&query);
-    let rankings = vec![
-        semantic_ranking(&chunks, &query_embedding),
-        bm25_ranking(&chunks, &query_tokens),
-    ];
-    let fused = reciprocal_rank_fusion(&rankings);
+    let keyword_ids =
+        keyword_ranking(&conn, &query_tokens, CANDIDATE_LIMIT).map_err(|e| e.to_string())?;
+    let semantic_ids = semantic_top_k(&conn, &query_embedding, CANDIDATE_LIMIT as usize)
+        .map_err(|e| e.to_string())?;
 
+    let fused = reciprocal_rank_fusion(&[semantic_ids, keyword_ids]);
     let mut fused_vec: Vec<(i64, f32)> = fused.into_iter().collect();
     fused_vec.sort_by(|a, b| b.1.total_cmp(&a.1));
     fused_vec.truncate(limit.max(0) as usize);
 
-    let by_id: HashMap<i64, &ChunkRow> = chunks.iter().map(|c| (c.id, c)).collect();
+    let ids: Vec<i64> = fused_vec.iter().map(|(id, _)| *id).collect();
+    let rows = hydrate(&conn, &ids).map_err(|e| e.to_string())?;
+
     Ok(fused_vec
         .into_iter()
         .filter_map(|(id, score)| {
-            by_id.get(&id).map(|c| SearchResult {
+            rows.get(&id).map(|c| SearchResult {
                 path: c.path.clone(),
                 chunk_index: c.chunk_index,
                 text: c.text.clone(),
@@ -156,43 +242,94 @@ pub fn hybrid_search_cmd(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::{embedding_to_blob, init_db};
 
-    fn chunk(id: i64, text: &str) -> ChunkRow {
-        ChunkRow {
-            id,
-            path: format!("/tmp/{id}.txt"),
-            chunk_index: 0,
-            text: text.to_string(),
-            embedding: None,
-        }
+    fn test_db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        init_db(&conn).unwrap();
+        conn
     }
 
-    fn chunk_with_embedding(id: i64, embedding: Vec<f32>) -> ChunkRow {
-        ChunkRow {
-            id,
-            path: format!("/tmp/{id}.txt"),
-            chunk_index: 0,
-            text: String::new(),
-            embedding: Some(embedding),
+    /// Inserts a document + single chunk, returning the chunk's id. Goes through raw SQL
+    /// (like the store.rs tests) rather than the `#[tauri::command]` functions, so the
+    /// FTS triggers created by `migrate_to_v2` are exercised exactly as they'd fire in
+    /// production.
+    fn insert_chunk(conn: &Connection, path: &str, text: &str, embedding: Option<&[f32]>) -> i64 {
+        conn.execute(
+            "INSERT INTO documents (path, modified_ms) VALUES (?1, 0)
+             ON CONFLICT(path) DO NOTHING",
+            params![path],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chunks (path, chunk_index, text) VALUES (?1, 0, ?2)",
+            params![path, text],
+        )
+        .unwrap();
+        let id = conn.last_insert_rowid();
+        if let Some(e) = embedding {
+            conn.execute(
+                "UPDATE chunks SET embedding = ?1, dim = ?2 WHERE id = ?3",
+                params![embedding_to_blob(e), e.len() as i64, id],
+            )
+            .unwrap();
         }
+        id
     }
 
     #[test]
-    fn bm25_ranks_exact_term_match_first() {
-        let chunks = vec![
-            chunk(1, "the quick brown fox jumps over the lazy dog"),
-            chunk(2, "error code E1234 occurred during startup"),
-            chunk(3, "completely unrelated content about gardening"),
-        ];
-        let ranking = bm25_ranking(&chunks, &tokenize("E1234"));
-        assert_eq!(ranking.first(), Some(&2));
+    fn keyword_ranking_only_prefixes_the_final_token() {
+        let conn = test_db();
+        let budgeting = insert_chunk(&conn, "/tmp/a.txt", "the budgeting spreadsheet for this year", None);
+        let quarterly_only = insert_chunk(&conn, "/tmp/b.txt", "quarterly report", None);
+        insert_chunk(&conn, "/tmp/c.txt", "completely unrelated gardening content", None);
+
+        // "quarterly budg" -> "quarterly" OR "budg"* - both non-prefix "quarterly" and
+        // prefix "budg"* should match, gardening should not.
+        let tokens = tokenize("quarterly budg");
+        let ranked = keyword_ranking(&conn, &tokens, 10).unwrap();
+        let ranked: std::collections::HashSet<_> = ranked.into_iter().collect();
+        assert!(ranked.contains(&budgeting));
+        assert!(ranked.contains(&quarterly_only));
+        assert_eq!(ranked.len(), 2);
+
+        // "qua budg" -> "qua" OR "budg"* - if the first token were also prefixed, "qua"
+        // would spuriously match "quarterly report" via prefix. It must not.
+        let tokens = tokenize("qua budg");
+        let ranked = keyword_ranking(&conn, &tokens, 10).unwrap();
+        assert_eq!(ranked, vec![budgeting]);
     }
 
     #[test]
-    fn bm25_excludes_chunks_with_no_term_overlap() {
-        let chunks = vec![chunk(1, "hello world"), chunk(2, "goodbye moon")];
-        let ranking = bm25_ranking(&chunks, &tokenize("world"));
-        assert_eq!(ranking, vec![1]);
+    fn keyword_ranking_handles_query_syntax_characters_without_erroring() {
+        let conn = test_db();
+        insert_chunk(&conn, "/tmp/a.txt", "some normal text content", None);
+
+        let tokens = tokenize("foo AND \"bar OR (baz");
+        let result = keyword_ranking(&conn, &tokens, 10);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn semantic_top_k_skips_chunks_without_an_embedding_yet() {
+        let conn = test_db();
+        let a = insert_chunk(&conn, "/tmp/a.txt", "text a", Some(&[1.0, 0.0]));
+        insert_chunk(&conn, "/tmp/b.txt", "not embedded yet", None);
+        let c = insert_chunk(&conn, "/tmp/c.txt", "text c", Some(&[0.9, 0.1]));
+
+        let ranking = semantic_top_k(&conn, &[1.0, 0.0], 10).unwrap();
+        assert_eq!(ranking, vec![a, c]);
+    }
+
+    #[test]
+    fn semantic_top_k_respects_the_limit() {
+        let conn = test_db();
+        let close = insert_chunk(&conn, "/tmp/a.txt", "text a", Some(&[1.0, 0.0]));
+        insert_chunk(&conn, "/tmp/b.txt", "text b", Some(&[0.0, 1.0]));
+        insert_chunk(&conn, "/tmp/c.txt", "text c", Some(&[-1.0, 0.0]));
+
+        let ranking = semantic_top_k(&conn, &[1.0, 0.0], 1).unwrap();
+        assert_eq!(ranking, vec![close]);
     }
 
     #[test]
@@ -211,16 +348,5 @@ mod tests {
         let fused = reciprocal_rank_fusion(&rankings);
         assert!(fused.contains_key(&1));
         assert!(fused[&2] > fused[&1]);
-    }
-
-    #[test]
-    fn semantic_ranking_skips_chunks_without_an_embedding_yet() {
-        let chunks = vec![
-            chunk_with_embedding(1, vec![1.0, 0.0]),
-            chunk(2, "not embedded yet"), // still text-only, embedding is None
-            chunk_with_embedding(3, vec![0.9, 0.1]),
-        ];
-        let ranking = semantic_ranking(&chunks, &[1.0, 0.0]);
-        assert_eq!(ranking, vec![1, 3]);
     }
 }

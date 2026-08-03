@@ -4,6 +4,11 @@ use std::sync::Mutex;
 
 pub struct Db(pub Mutex<Connection>);
 
+/// A second connection, opened read-only, so search queries never queue behind an
+/// indexing write transaction held on [`Db`]. Safe under WAL mode (set in `init_db`),
+/// which lets readers and a single writer proceed concurrently.
+pub struct ReadDb(pub Mutex<Connection>);
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextChunkInput {
@@ -37,11 +42,22 @@ pub struct DocumentMtime {
 /// before embeddings were nullable) gets migrated in place instead of silently keeping
 /// its old, incompatible constraints.
 pub fn init_db(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    // journal_mode = WAL persists as a property of the database file itself, so it's
+    // enough to set it once here on the writer connection - the second, read-only
+    // connection opened in lib.rs's `setup` picks it up automatically. `synchronous` is
+    // per-connection but only affects writes, so it doesn't need setting there either.
+    conn.execute_batch(
+        "PRAGMA foreign_keys = ON;
+         PRAGMA journal_mode = WAL;
+         PRAGMA synchronous = NORMAL;",
+    )?;
 
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version < 1 {
         migrate_to_v1(conn)?;
+    }
+    if version < 2 {
+        migrate_to_v2(conn)?;
     }
 
     Ok(())
@@ -98,20 +114,44 @@ fn migrate_to_v1(conn: &Connection) -> rusqlite::Result<()> {
     )
 }
 
-fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
+/// Adds an FTS5 external-content index over `chunks.text`, replacing what used to be a
+/// hand-rolled BM25 implementation that re-tokenized the entire corpus on every search
+/// (see `hybrid_search.rs`). `content='chunks'` keeps chunk text from being duplicated on
+/// disk; SQLite maintains the index incrementally from here on via the three triggers
+/// below, which cover every write path in this file:
+///
+/// - `upsert_document_chunks_text` deletes then re-inserts chunks for a path - covered by
+///   the delete and insert triggers.
+/// - `update_chunk_embeddings` only ever writes `embedding`/`dim`, never `text` - the
+///   update trigger is scoped to `UPDATE OF text` specifically so that call is a no-op
+///   here rather than needlessly deleting/reinserting the FTS row on every embedding
+///   attach during Phase 2 indexing.
+/// - `remove_document` deletes from `chunks` directly (see below) - covered by the delete
+///   trigger.
+fn migrate_to_v2(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "CREATE VIRTUAL TABLE chunks_fts USING fts5(
+             text, content='chunks', content_rowid='id', tokenize='unicode61'
+         );
+         INSERT INTO chunks_fts(chunks_fts) VALUES('rebuild');
+
+         CREATE TRIGGER chunks_ai AFTER INSERT ON chunks BEGIN
+             INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+         END;
+         CREATE TRIGGER chunks_ad AFTER DELETE ON chunks BEGIN
+             INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+         END;
+         CREATE TRIGGER chunks_au AFTER UPDATE OF text ON chunks BEGIN
+             INSERT INTO chunks_fts(chunks_fts, rowid, text) VALUES ('delete', old.id, old.text);
+             INSERT INTO chunks_fts(rowid, text) VALUES (new.id, new.text);
+         END;
+
+         PRAGMA user_version = 2;",
+    )
+}
+
+pub(crate) fn embedding_to_blob(embedding: &[f32]) -> Vec<u8> {
     embedding.iter().flat_map(|f| f.to_le_bytes()).collect()
-}
-
-/// Deserializes a little-endian f32 BLOB back into a vector, as produced by [`embedding_to_blob`].
-pub fn blob_to_embedding(blob: &[u8]) -> Vec<f32> {
-    blob.chunks_exact(4)
-        .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-        .collect()
-}
-
-/// Embeddings are unit-normalized before storage, so a plain dot product equals cosine similarity.
-pub(crate) fn dot(a: &[f32], b: &[f32]) -> f32 {
-    a.iter().zip(b.iter()).map(|(x, y)| x * y).sum()
 }
 
 #[derive(Debug, Serialize)]
@@ -190,12 +230,18 @@ pub fn update_chunk_embeddings(
     tx.commit().map_err(|e| e.to_string())
 }
 
+/// Deletes `chunks` explicitly (rather than relying solely on `ON DELETE CASCADE`) so the
+/// FTS delete trigger fires unconditionally, without depending on the interaction between
+/// foreign-key cascades and triggers.
 #[tauri::command]
 pub fn remove_document(db: tauri::State<Db>, path: String) -> Result<(), String> {
-    let conn = db.0.lock().map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM documents WHERE path = ?1", params![path])
+    let mut conn = db.0.lock().map_err(|e| e.to_string())?;
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM chunks WHERE path = ?1", params![path])
         .map_err(|e| e.to_string())?;
-    Ok(())
+    tx.execute("DELETE FROM documents WHERE path = ?1", params![path])
+        .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -248,12 +294,14 @@ mod tests {
         conn
     }
 
-    #[test]
-    fn blob_roundtrip_preserves_values() {
-        let embedding = vec![0.1_f32, -0.5, 3.25, 0.0];
-        let blob = embedding_to_blob(&embedding);
-        let restored = blob_to_embedding(&blob);
-        assert_eq!(embedding, restored);
+    /// Inverse of `embedding_to_blob`, kept test-only since no production code needs to
+    /// go from a stored blob back to a `Vec<f32>` (search scores directly off the raw
+    /// bytes - see `hybrid_search::dot_bytes`); tests still need it to assert on what got
+    /// stored.
+    fn decode_blob(blob: &[u8]) -> Vec<f32> {
+        blob.chunks_exact(4)
+            .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+            .collect()
     }
 
     #[test]
@@ -310,7 +358,7 @@ mod tests {
                 |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap();
-        assert_eq!(blob_to_embedding(&embedding), vec![1.0, 2.0]);
+        assert_eq!(decode_blob(&embedding), vec![1.0, 2.0]);
         assert_eq!(dim, 2);
     }
 
@@ -359,14 +407,109 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 1);
+
+        // The FTS index should reflect only the replacement, not an orphaned row for the
+        // deleted "old" chunk.
+        let old_fts_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH 'old'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(old_fts_count, 0);
+        let new_fts_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH 'new'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(new_fts_count, 1);
     }
 
     #[test]
-    fn dot_product_ranks_closer_vectors_higher() {
-        let query = vec![1.0_f32, 0.0];
-        let close = vec![0.9_f32, 0.1];
-        let far = vec![0.0_f32, 1.0];
-        assert!(dot(&query, &close) > dot(&query, &far));
+    fn fts_index_has_no_orphan_after_document_removal() {
+        let conn = test_db();
+        conn.execute(
+            "INSERT INTO documents (path, modified_ms) VALUES (?1, ?2)",
+            params!["/tmp/removeme.txt", 100],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chunks (path, chunk_index, text) VALUES (?1, 0, 'searchable content')",
+            params!["/tmp/removeme.txt"],
+        )
+        .unwrap();
+
+        let before: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH 'searchable'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(before, 1);
+
+        // Exercise the real transactional delete path, not a hand-copied approximation.
+        let tx = conn.unchecked_transaction().unwrap();
+        tx.execute(
+            "DELETE FROM chunks WHERE path = ?1",
+            params!["/tmp/removeme.txt"],
+        )
+        .unwrap();
+        tx.execute(
+            "DELETE FROM documents WHERE path = ?1",
+            params!["/tmp/removeme.txt"],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        let after: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH 'searchable'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(after, 0);
+    }
+
+    #[test]
+    fn migrate_to_v2_backfills_fts_from_existing_v1_chunks() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Hand-build a v1 database (nullable embeddings, no FTS) predating this migration.
+        conn.execute_batch(
+            "CREATE TABLE documents (path TEXT PRIMARY KEY, modified_ms INTEGER NOT NULL);
+             CREATE TABLE chunks (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 path TEXT NOT NULL REFERENCES documents(path) ON DELETE CASCADE,
+                 chunk_index INTEGER NOT NULL,
+                 text TEXT NOT NULL,
+                 embedding BLOB,
+                 dim INTEGER
+             );
+             CREATE INDEX IF NOT EXISTS idx_chunks_path ON chunks(path);
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO documents (path, modified_ms) VALUES (?1, ?2)",
+            params!["/tmp/pre-existing.txt", 100],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO chunks (path, chunk_index, text) VALUES (?1, 0, 'preexisting searchable text')",
+            params!["/tmp/pre-existing.txt"],
+        )
+        .unwrap();
+
+        init_db(&conn).unwrap();
+
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM chunks_fts WHERE chunks_fts MATCH 'preexisting'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
     }
 
     #[test]
@@ -430,7 +573,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(text, "kept");
-        assert_eq!(blob_to_embedding(&embedding), vec![1.0, 2.0]);
+        assert_eq!(decode_blob(&embedding), vec![1.0, 2.0]);
 
         // New nullable-embedding inserts should now work against the migrated table.
         conn.execute(
