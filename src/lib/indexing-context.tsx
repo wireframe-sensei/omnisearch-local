@@ -105,7 +105,7 @@ export function IndexingProvider({ children }: { children: ReactNode }) {
       .then(({ attemptedPaths, failures: newFailures }) => {
         if (cancelled) return;
         // Clear stale entries for anything reprocessed this run, then re-add only
-        // what's still actually failing — a file that got fixed just drops off.
+        // what's still actually failing - a file that got fixed just drops off.
         const attempted = new Set(attemptedPaths);
         setFailures((prev) => {
           const kept = prev.filter((f) => !attempted.has(f.path));

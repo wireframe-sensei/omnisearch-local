@@ -87,7 +87,7 @@ export function SearchView({ onOpenSettings }: SearchViewProps) {
     return () => clearTimeout(timer);
   }, [query]);
 
-  // The AI answer belongs to whatever query it was asked for — once that query
+  // The AI answer belongs to whatever query it was asked for - once that query
   // changes, the old answer (and any still-streaming generation) is stale.
   useEffect(() => {
     setAnswer("");

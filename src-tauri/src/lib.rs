@@ -111,7 +111,7 @@ pub fn run() {
         .expect("error while building tauri application");
 
     // Keep the app (and its tray icon / global hotkey) alive when the user
-    // closes the window or hits Cmd+Q — hide instead of quitting. `code` is
+    // closes the window or hits Cmd+Q - hide instead of quitting. `code` is
     // `None` for user-driven exit requests and `Some(_)` for a programmatic
     // `AppHandle::exit` call (used by the tray's real "Quit" item), so this
     // only intercepts the former.

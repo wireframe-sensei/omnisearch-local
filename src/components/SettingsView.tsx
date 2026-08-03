@@ -105,7 +105,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   }
 
   async function handleAddHomeFolder() {
-    // Recursively includes Desktop, Documents, Downloads, etc. — one directory
+    // Recursively includes Desktop, Documents, Downloads, etc. - one directory
     // covers all of them without picking each one individually.
     const home = await homeDir();
     await addDirectories([home]);

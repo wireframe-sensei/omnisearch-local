@@ -11,7 +11,7 @@ struct ChunkRow {
     path: String,
     chunk_index: i64,
     text: String,
-    /// `None` until the background embedding step catches up — still keyword-searchable
+    /// `None` until the background embedding step catches up - still keyword-searchable
     /// via BM25 in the meantime, just absent from the semantic ranking.
     embedding: Option<Vec<f32>>,
 }
@@ -90,7 +90,7 @@ fn bm25_ranking(chunks: &[ChunkRow], query_tokens: &[String]) -> Vec<i64> {
 
 /// Combines multiple rankings of the same items into one score via Reciprocal Rank
 /// Fusion, so BM25's unbounded scores and cosine similarity's [-1, 1] range never need
-/// to be normalized onto a common scale — only each ranking's relative order matters.
+/// to be normalized onto a common scale - only each ranking's relative order matters.
 fn reciprocal_rank_fusion(rankings: &[Vec<i64>]) -> HashMap<i64, f32> {
     let mut fused: HashMap<i64, f32> = HashMap::new();
     for ranking in rankings {

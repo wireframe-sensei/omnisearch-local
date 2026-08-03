@@ -21,7 +21,7 @@ export interface DocumentMtime {
   modifiedMs: number;
 }
 
-/** Stores chunk text immediately — keyword (BM25) searchable right away, before embedding. */
+/** Stores chunk text immediately - keyword (BM25) searchable right away, before embedding. */
 export function upsertDocumentChunksText(
   path: string,
   modifiedMs: number,

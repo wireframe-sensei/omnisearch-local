@@ -1,6 +1,6 @@
 {
   "name": "omnisearch-local",
-  "description": "Privacy-first, local-only semantic file search for the desktop — no cloud, no telemetry.",
+  "description": "Privacy-first, local-only semantic file search for the desktop - no cloud, no telemetry.",
   "private": true,
   "version": "0.1.0",
   "license": "MIT",

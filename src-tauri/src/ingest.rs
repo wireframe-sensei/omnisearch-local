@@ -147,8 +147,8 @@ fn extract_plain_text(path: &Path) -> Result<String, String> {
 }
 
 /// Extracts a PDF's text page-by-page (rather than pdf-extract's own whole-document
-/// `extract_text`), catching panics per page. pdf-extract panics — rather than
-/// returning `Err` — on a number of malformed-but-common real-world constructs (e.g.
+/// `extract_text`), catching panics per page. pdf-extract panics - rather than
+/// returning `Err` - on a number of malformed-but-common real-world constructs (e.g.
 /// certain embedded Type3 fonts with missing width entries, unexpected encodings).
 /// Isolating each page means one bad page/font only loses that page's text instead of
 /// silently losing the entire document; an outer catch_unwind is still a safety net in
@@ -188,7 +188,7 @@ fn extract_pdf_text_page_by_page(path: &Path) -> Result<String, String> {
             outcome.map(|_| text)
         }));
 
-        // A page that errors or panics is skipped — the rest of the document's text is
+        // A page that errors or panics is skipped - the rest of the document's text is
         // still worth keeping rather than discarding everything over one bad page.
         if let Ok(Ok(text)) = page_result {
             combined.push_str(&text);
@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn catch_unwind_converts_a_panic_into_an_err_without_crashing_the_process() {
         // Exercises the same catch_unwind + map_err pattern extract_pdf_text uses, with a
-        // synthetic panic standing in for pdf-extract's internal panic on malformed PDFs —
+        // synthetic panic standing in for pdf-extract's internal panic on malformed PDFs -
         // confirming the wrapping mechanism itself works in this test environment.
         let result: Result<i32, String> = std::panic::catch_unwind(|| -> i32 {
             panic!("simulated third-party crate panic");

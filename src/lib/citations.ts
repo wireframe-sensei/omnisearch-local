@@ -43,7 +43,7 @@ function parentFolderName(path: string): string {
   return segments.length >= 2 ? segments[segments.length - 2] : "";
 }
 
-/** Same filename can appear more than once across different folders — disambiguate those. */
+/** Same filename can appear more than once across different folders - disambiguate those. */
 export function citationLabel(result: FileResult, allResults: FileResult[]): string {
   const sameName = allResults.filter((r) => r.fileName === result.fileName);
   if (sameName.length <= 1) return result.fileName;

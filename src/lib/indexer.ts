@@ -16,7 +16,7 @@ export interface IndexFailure {
 }
 
 export interface IndexRunResult {
-  /** Every path this run attempted to (re-)index, whether it succeeded or not — lets
+  /** Every path this run attempted to (re-)index, whether it succeeded or not - lets
    * the caller clear stale failure entries for files that succeeded this time. */
   attemptedPaths: string[];
   failures: IndexFailure[];
@@ -31,7 +31,7 @@ function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** Extracts, chunks, and stores a file's text — no embedding yet, so it's immediately
+/** Extracts, chunks, and stores a file's text - no embedding yet, so it's immediately
  * keyword (BM25) searchable. Returns the chunks so the caller can embed them next. */
 async function storeFileText(file: IndexableFile): Promise<TextChunk[]> {
   const doc = await extractDocumentText(file.path);
@@ -83,8 +83,8 @@ export async function indexPath(path: string): Promise<void> {
  * changed since it was last indexed, and removes documents whose files are no longer
  * reachable from the current directory selection.
  *
- * Runs in two phases: first every changed file's text is extracted and stored (fast —
- * no ML involved — so the whole scan becomes keyword-searchable almost immediately),
+ * Runs in two phases: first every changed file's text is extracted and stored (fast -
+ * no ML involved - so the whole scan becomes keyword-searchable almost immediately),
  * then embeddings for everything just stored are computed across a worker pool with
  * real cross-file parallelism, attaching to (and making semantically searchable) each
  * file as soon as its own chunks finish, rather than waiting for the whole scan.
@@ -92,7 +92,7 @@ export async function indexPath(path: string): Promise<void> {
  * Files that fail extraction entirely (a file this whole app couldn't get any text
  * out of) are reported in `failures` rather than just logged, so the UI can show the
  * user what didn't make it in. A file that never successfully indexes has no recorded
- * mtime, so it's retried — and re-reported here if it's still broken — on every run.
+ * mtime, so it's retried - and re-reported here if it's still broken - on every run.
  */
 export async function indexDirectories(
   directories: string[],
@@ -119,7 +119,7 @@ export async function indexDirectories(
   let done = files.length - filesToProcess.length;
   onProgress?.(done, files.length);
 
-  // Phase 1: text only. Sequential is fine here — it's I/O + parsing, not ML, so it's
+  // Phase 1: text only. Sequential is fine here - it's I/O + parsing, not ML, so it's
   // already fast, and each file becomes keyword-searchable the moment it's stored.
   const pending: { path: string; chunks: TextChunk[] }[] = [];
   for (const file of filesToProcess) {
@@ -134,7 +134,7 @@ export async function indexDirectories(
     }
   }
 
-  // Phase 2: embed every pending file's chunks concurrently across the whole pool —
+  // Phase 2: embed every pending file's chunks concurrently across the whole pool -
   // flattened across files (not per-file) so a file with few chunks never leaves
   // workers idle while another file with many chunks is still going.
   const remainingByPath = new Map(pending.map((p) => [p.path, p.chunks.length]));

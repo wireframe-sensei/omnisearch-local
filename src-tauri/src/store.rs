@@ -123,7 +123,7 @@ pub struct SearchResult {
     pub score: f32,
 }
 
-/// Stores chunk text immediately, with no embedding yet — the chunk becomes keyword
+/// Stores chunk text immediately, with no embedding yet - the chunk becomes keyword
 /// (BM25) searchable right away, well before the slower embedding step finishes.
 #[tauri::command]
 pub fn upsert_document_chunks_text(

@@ -15,7 +15,7 @@ export function cancelOllamaAnswer(): Promise<void> {
 
 /**
  * Streams a local LLM answer via Ollama. Resolves when the full response has arrived
- * (or rejects on failure) — `onToken` fires incrementally as each piece streams in,
+ * (or rejects on failure) - `onToken` fires incrementally as each piece streams in,
  * via the `ollama-token` event emitted from the Rust side.
  */
 export async function streamOllamaAnswer(

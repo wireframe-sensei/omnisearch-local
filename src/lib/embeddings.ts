@@ -2,7 +2,7 @@ import { AutoTokenizer, type PreTrainedTokenizer } from "@huggingface/transforme
 import { embedOne, embedMany } from "@/lib/embedding-pool";
 
 /**
- * Runs entirely in the webview via WASM (onnxruntime-web) — no network calls after the
+ * Runs entirely in the webview via WASM (onnxruntime-web) - no network calls after the
  * one-time model download, which transformers.js caches locally for subsequent offline
  * runs. The actual model inference happens off the main thread; see embedding-pool.ts.
  */
