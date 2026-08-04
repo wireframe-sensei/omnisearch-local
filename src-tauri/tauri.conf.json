@@ -25,7 +25,7 @@
         "shadow": true,
         "titleBarStyle": "Overlay",
         "hiddenTitle": true,
-        "visible": true
+        "visible": false
       }
     ],
     "macOSPrivateApi": true,
