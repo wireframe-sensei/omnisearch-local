@@ -8,7 +8,7 @@ use std::sync::Mutex;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
-    AppHandle, Manager, RunEvent,
+    AppHandle, Manager, RunEvent, WindowEvent,
 };
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
@@ -65,6 +65,22 @@ pub fn run() {
                 rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
             )?;
             app.manage(store::ReadDb(Mutex::new(read_conn)));
+
+            // Auto-hide on focus loss (clicking into another app), mirroring
+            // Spotlight/Alfred/Raycast. Without this, `toggle_main_window`'s
+            // `is_visible()` check gets out of sync with what the user actually sees:
+            // the window stays visible-but-unfocused in the background, so the next
+            // hotkey press hides it (since it's still "visible") instead of bringing it
+            // forward, requiring a second press. Hiding here keeps `is_visible()`
+            // truthful, so a single press always does what's expected.
+            if let Some(window) = app.get_webview_window("main") {
+                let window_to_hide = window.clone();
+                window.on_window_event(move |event| {
+                    if let WindowEvent::Focused(false) = event {
+                        let _ = window_to_hide.hide();
+                    }
+                });
+            }
 
             // Non-fatal: another process (e.g. a still-running previous `tauri dev`
             // instance) can hold this exact combo. Failing here shouldn't take down

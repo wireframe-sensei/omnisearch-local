@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SearchView } from "@/components/SearchView";
 import { SettingsView } from "@/components/SettingsView";
 import { IndexingProvider } from "@/lib/indexing-context";
@@ -9,10 +10,15 @@ type View = "search" | "settings";
 function App() {
   const [view, setView] = useState<View>("search");
 
+  // Escape mirrors Spotlight: on Search (the root view) it dismisses the window; from
+  // Settings it steps back to Search first, same as most launchers with a sub-view.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape" && view === "settings") {
+      if (e.key !== "Escape") return;
+      if (view === "settings") {
         setView("search");
+      } else {
+        getCurrentWindow().hide();
       }
     }
     window.addEventListener("keydown", handleKeyDown);
