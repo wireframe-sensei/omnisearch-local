@@ -5,8 +5,13 @@ import type { EmbedRequest, EmbedResponse } from "@/workers/embedding-worker";
  * concurrently (real parallelism across CPU cores) instead of one at a time on the
  * main thread. Capped at 4: each worker loads its own copy of the ~30MB model, and
  * embedding is CPU-bound, so more workers than cores buys nothing but memory.
+ *
+ * Deliberately leaves one core free rather than using every available core - this pool
+ * runs continuously in the background for as long as there's an embedding backlog
+ * (potentially hours on a large index), and using every core with no headroom made the
+ * whole system feel unresponsive, not just this app slow.
  */
-const POOL_SIZE = Math.max(1, Math.min(navigator.hardwareConcurrency || 4, 4));
+const POOL_SIZE = Math.max(1, Math.min((navigator.hardwareConcurrency || 4) - 1, 4));
 
 interface WorkerSlot {
   worker: Worker;

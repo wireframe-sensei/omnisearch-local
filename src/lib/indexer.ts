@@ -12,8 +12,18 @@ import {
 } from "@/lib/vector-store";
 
 /** Bounds IPC payload size and memory per round-trip when draining a large backlog of
- * chunks still missing an embedding - see `resumePendingEmbeddings`. */
-const PENDING_EMBED_BATCH_SIZE = 500;
+ * chunks still missing an embedding - see `resumePendingEmbeddings`. Kept small (rather
+ * than a larger batch processed in one uninterrupted burst) so there's a checkpoint to
+ * pause at every few seconds instead of every few minutes. */
+const PENDING_EMBED_BATCH_SIZE = 100;
+/** Paused between batches so the CPU cores the worker pool was using actually go idle
+ * for a moment - the resume loop can run for hours on a large backlog, and a tight
+ * back-to-back loop left no window for the OS scheduler or other apps to get in. */
+const PENDING_EMBED_BATCH_PAUSE_MS = 500;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export interface IndexFailure {
   path: string;
@@ -255,5 +265,6 @@ export async function resumePendingEmbeddings(
     });
 
     if (batch.length < PENDING_EMBED_BATCH_SIZE) break;
+    await sleep(PENDING_EMBED_BATCH_PAUSE_MS);
   }
 }
