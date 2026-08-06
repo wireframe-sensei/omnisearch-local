@@ -112,6 +112,12 @@ Have an idea? [Open an issue](../../issues) - see [Contributing](#contributing) 
 
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for how to set up a dev environment, coding conventions, and the PR process. Please also read the [Code of Conduct](CODE_OF_CONDUCT.md).
 
+Found a security issue? Please see [SECURITY.md](SECURITY.md) instead of opening a public issue.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for release history.
+
 ## License
 
 MIT - see [LICENSE](LICENSE) for details.
