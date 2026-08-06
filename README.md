@@ -130,6 +130,8 @@ MIT - see [LICENSE](LICENSE) for details.
 
 Built on [Tauri](https://tauri.app), [Hugging Face Transformers.js](https://huggingface.co/docs/transformers.js), [Ollama](https://ollama.com), and a handful of excellent Rust crates - see [`src-tauri/Cargo.toml`](src-tauri/Cargo.toml) for the full list.
 
+App icon from [SVG Repo](https://www.svgrepo.com).
+
 ---
 
 <div align="center">
