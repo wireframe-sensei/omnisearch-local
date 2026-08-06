@@ -100,12 +100,17 @@ pub fn run() {
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let tray_menu = Menu::with_items(app, &[&show_hide_item, &quit_item])?;
 
+            // A dedicated monochrome icon (black artwork, alpha-only shape) rather than
+            // the full-color app icon - macOS treats it as a "template" image and
+            // recolors it automatically for light/dark menu bars and click-highlight
+            // states. `icon_as_template` is a no-op outside macOS.
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!(
+                "../icons/tray-icon.png"
+            ))?;
+
             TrayIconBuilder::new()
-                .icon(
-                    app.default_window_icon()
-                        .expect("app icon missing from tauri.conf.json")
-                        .clone(),
-                )
+                .icon(tray_icon)
+                .icon_as_template(true)
                 .menu(&tray_menu)
                 .tooltip("OmniSearch")
                 .on_menu_event(|app, event| match event.id().as_ref() {

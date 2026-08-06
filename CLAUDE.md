@@ -91,7 +91,7 @@ Custom `#[tauri::command]`s (everything in `ingest.rs`, `store.rs`, `watcher.rs`
 
 - **`pdf-extract` panics, not errors, on many malformed-but-common real-world PDFs** (bad Type3 font widths, unexpected encodings, etc.) - every call into it is wrapped in `std::panic::catch_unwind`, and extraction happens **page-by-page** (`output_doc_page`, the same function the crate's own per-page API uses) rather than whole-document, so one bad page doesn't lose an entire document's text.
 - **`pnpm-workspace.yaml` has an `allowBuilds` gate** (a supply-chain policy specific to this environment) requiring explicit `true`/`false` per dependency wanting to run install scripts. `onnxruntime-node`, `protobufjs`, and `sharp` are set to `false` - they're transitive deps of `@huggingface/transformers` for its Node-native backend, which this app never uses (everything runs in the webview via WASM).
-- The tray icon reuses the app's full-color icon rather than a proper macOS "template" (monochrome) icon - cosmetic only, not a bug.
+- The tray icon uses a dedicated monochrome asset (`src-tauri/icons/tray-icon.png` - solid black artwork, alpha channel only, generated from the full-color app icon's alpha mask) rather than the full-color app icon, with `.icon_as_template(true)` set on the `TrayIconBuilder`. This makes macOS treat it as a template image, auto-recoloring it for light/dark menu bars and click-highlight states - the same reason `tauri`'s `image-png` Cargo feature is enabled (needed for `Image::from_bytes` to decode the PNG at runtime). `icon_as_template` is a no-op outside macOS.
 - `package.json` pins `packageManager: "pnpm@11.18.0"`; use that major version to match the committed lockfile.
 
 ## Writing style guidelines
