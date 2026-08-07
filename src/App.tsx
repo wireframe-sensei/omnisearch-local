@@ -7,6 +7,7 @@ import { IndexingProvider } from "@/lib/indexing-context";
 import { OllamaProvider } from "@/lib/ollama-context";
 import { applyGlobalShortcut } from "@/lib/hotkey";
 import { DEFAULT_HOTKEY, getGlobalHotkeyPreference } from "@/lib/settings-store";
+import { promptForFilePermissions } from "@/lib/permissions";
 
 function App() {
   const [windowLabel, setWindowLabel] = useState<string>("");
@@ -29,6 +30,11 @@ function App() {
         // back silently to whatever the backend already has bound (the default).
       });
     });
+
+    // Only prompt for permissions on the main window on first load
+    if (getCurrentWindow().label === "main") {
+      promptForFilePermissions().catch(() => {});
+    }
   }, []);
 
   // Escape handling differs by window: Search dismisses it, Settings just closes

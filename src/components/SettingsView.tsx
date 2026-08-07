@@ -26,7 +26,6 @@ import { buildErrorExplanationPrompt } from "@/lib/error-explainer";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { applyGlobalShortcut, formatShortcut, shortcutFromKeyboardEvent } from "@/lib/hotkey";
 import { getGlobalHotkeyPreference, setGlobalHotkeyPreference, getImageExtractionEnabled, setImageExtractionEnabled } from "@/lib/settings-store";
-import { promptForFilePermissions } from "@/lib/permissions";
 import type { IndexFailure } from "@/lib/indexer";
 
 interface SettingsViewProps {
@@ -42,8 +41,6 @@ interface Explanation {
 
 type SettingsSection = "directories" | "ai" | "system";
 
-// Track if we've already prompted for permissions in this session to avoid repeated dialogs
-let permissionsPromptedThisSession = false;
 
 export function SettingsView({ onBack }: SettingsViewProps) {
   const {
@@ -81,15 +78,9 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const [activeSection, setActiveSection] = useState<SettingsSection>("directories");
   const [selectedFailure, setSelectedFailure] = useState<IndexFailure | null>(null);
 
-  // Settings window is independent, so re-check Ollama and prompt for permissions
-  // only once per session (not on every settings open).
+  // Settings window is independent, so re-check Ollama state when opening
   useEffect(() => {
     refreshOllama();
-
-    if (!permissionsPromptedThisSession) {
-      permissionsPromptedThisSession = true;
-      promptForFilePermissions().catch(() => {});
-    }
   }, []);
 
   // Cancel any in-flight explanation if the view unmounts mid-stream.
