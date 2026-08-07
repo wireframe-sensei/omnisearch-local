@@ -100,6 +100,23 @@ fn check_tesseract_installed() -> Result<bool, String> {
     Ok(output.status.success())
 }
 
+#[tauri::command]
+fn show_settings_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn hide_settings_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.hide();
+    }
+    Ok(())
+}
+
 fn toggle_main_window(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -217,6 +234,8 @@ pub fn run() {
             resize_window,
             center_window,
             check_tesseract_installed,
+            show_settings_window,
+            hide_settings_window,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

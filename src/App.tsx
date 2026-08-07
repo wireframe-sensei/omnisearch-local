@@ -10,15 +10,12 @@ import { DEFAULT_HOTKEY, getGlobalHotkeyPreference } from "@/lib/settings-store"
 import { promptForFilePermissions } from "@/lib/permissions";
 import { ensureStoreInitialized, hasPromptedForPermissions, setPermissionsPrompted } from "@/lib/settings-store";
 
-type View = "search" | "settings";
-
-const SEARCH_WINDOW_WIDTH = 680;
-const SEARCH_WINDOW_HEIGHT = 500;
-const SETTINGS_WINDOW_WIDTH = 1000;
-const SETTINGS_WINDOW_HEIGHT = 700;
-
 function App() {
-  const [view, setView] = useState<View>("search");
+  const [windowLabel, setWindowLabel] = useState<string>("");
+
+  useEffect(() => {
+    setWindowLabel(getCurrentWindow().label);
+  }, []);
 
   // The backend registers the hardcoded default at startup (see SUMMON_SHORTCUT in
   // src-tauri/src/lib.rs) before this JS has even loaded, so the app is summonable
@@ -41,68 +38,64 @@ function App() {
       }
 
       // Only prompt for permissions once, on first launch
-      const alreadyPrompted = await hasPromptedForPermissions();
-      if (!alreadyPrompted) {
-        await setPermissionsPrompted();
-        promptForFilePermissions().catch(() => {});
+      if (windowLabel === "main") {
+        const alreadyPrompted = await hasPromptedForPermissions();
+        if (!alreadyPrompted) {
+          await setPermissionsPrompted();
+          promptForFilePermissions().catch(() => {});
+        }
       }
     })();
-  }, []);
+  }, [windowLabel]);
 
-  // Resize and center window when switching views
-  useEffect(() => {
-    if (view === "settings") {
-      // Expand to settings size
-      invoke("resize_window", {
-        width: SETTINGS_WINDOW_WIDTH,
-        height: SETTINGS_WINDOW_HEIGHT,
-      }).catch((e) => {
-        console.error("Failed to resize window to settings size:", e);
-      });
-    } else {
-      // Shrink back to search size and ensure it's centered
-      invoke("resize_window", {
-        width: SEARCH_WINDOW_WIDTH,
-        height: SEARCH_WINDOW_HEIGHT,
-      })
-        .then(() => {
-          // Additional center call to ensure proper positioning
-          return invoke("center_window");
-        })
-        .catch((e) => {
-          console.error("Failed to resize/center window:", e);
-        });
-    }
-  }, [view]);
-
-  // Escape: on Search, dismiss window; from Settings, step back to Search
+  // Escape handling: Search window hides, Settings window closes
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
-      if (view === "settings") {
-        setView("search");
-      } else {
-        getCurrentWindow().hide();
+      if (windowLabel === "settings") {
+        invoke("hide_settings_window").catch((err) => {
+          console.error("Failed to hide settings:", err);
+        });
+      } else if (windowLabel === "main") {
+        getCurrentWindow().hide().catch((err) => {
+          console.error("Failed to hide window:", err);
+        });
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [view]);
+  }, [windowLabel]);
 
-  const isSearchView = view === "search";
-  const containerClass = isSearchView
-    ? "h-screen w-screen overflow-hidden rounded-xl border border-border bg-background shadow-2xl backdrop-blur-xl"
-    : "h-screen w-screen overflow-hidden bg-background";
+  const openSettings = () => {
+    invoke("show_settings_window").catch((e) => {
+      console.error("Failed to open settings window:", e);
+    });
+  };
+
+  const closeSettings = () => {
+    invoke("hide_settings_window").catch((e) => {
+      console.error("Failed to close settings window:", e);
+    });
+  };
+
+  // Render based on which window this is
+  if (windowLabel === "settings") {
+    return (
+      <IndexingProvider>
+        <OllamaProvider>
+          <main className="h-screen w-screen overflow-hidden bg-background">
+            <SettingsView onBack={closeSettings} />
+          </main>
+        </OllamaProvider>
+      </IndexingProvider>
+    );
+  }
 
   return (
     <IndexingProvider>
       <OllamaProvider>
-        <main className={containerClass}>
-          {isSearchView ? (
-            <SearchView onOpenSettings={() => setView("settings")} />
-          ) : (
-            <SettingsView onBack={() => setView("search")} />
-          )}
+        <main className="h-screen w-screen overflow-hidden rounded-xl border border-border bg-background shadow-2xl backdrop-blur-xl">
+          <SearchView onOpenSettings={openSettings} />
         </main>
       </OllamaProvider>
     </IndexingProvider>

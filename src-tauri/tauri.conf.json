@@ -12,20 +12,36 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "OmniSearch",
         "width": 680,
         "height": 500,
         "minWidth": 600,
         "minHeight": 400,
         "center": true,
-        "decorations": true,
-        "transparent": false,
-        "resizable": true,
+        "decorations": false,
+        "transparent": true,
+        "resizable": false,
         "skipTaskbar": true,
         "shadow": true,
+        "titleBarStyle": "Overlay",
         "hiddenTitle": true,
         "visible": false,
         "backgroundThrottling": "disabled"
+      },
+      {
+        "label": "settings",
+        "title": "OmniSearch Settings",
+        "width": 1000,
+        "height": 700,
+        "minWidth": 800,
+        "minHeight": 600,
+        "center": true,
+        "decorations": true,
+        "transparent": false,
+        "resizable": true,
+        "skipTaskbar": false,
+        "visible": false
       }
     ],
     "macOSPrivateApi": true,
