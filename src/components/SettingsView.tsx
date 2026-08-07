@@ -20,6 +20,7 @@ import { useIndexing } from "@/lib/indexing-context";
 import { useOllama } from "@/lib/ollama-context";
 import { cancelOllamaAnswer, streamOllamaAnswer } from "@/lib/ollama";
 import { buildErrorExplanationPrompt } from "@/lib/error-explainer";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { applyGlobalShortcut, formatShortcut, shortcutFromKeyboardEvent } from "@/lib/hotkey";
 import { getGlobalHotkeyPreference, setGlobalHotkeyPreference, getImageExtractionEnabled, setImageExtractionEnabled } from "@/lib/settings-store";
 import { promptForFilePermissions } from "@/lib/permissions";
@@ -159,6 +160,22 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       setImageExtractionEnabledState(newState);
     } finally {
       setImageExtractionBusy(false);
+    }
+  }
+
+  async function handleInstallTesseract() {
+    const isMac = navigator.platform.toUpperCase().includes("MAC");
+    const isWindows = navigator.platform.toUpperCase().includes("WIN");
+
+    if (isMac) {
+      // Open Homebrew's Tesseract formula page
+      await openUrl("https://formulae.brew.sh/formula/tesseract");
+    } else if (isWindows) {
+      // Open Tesseract GitHub releases for Windows installer
+      await openUrl("https://github.com/UB-Mannheim/tesseract/wiki/Downloads");
+    } else {
+      // Linux - open the GitHub wiki with apt/dnf instructions
+      await openUrl("https://github.com/UB-Mannheim/tesseract/wiki/Downloads");
     }
   }
 
@@ -498,8 +515,16 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             />
             Extract text from images
           </label>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Requires tesseract. Install with: <code className="bg-accent px-1 py-0.5 rounded text-[11px]">brew install tesseract</code> (macOS)
+          <p className="mt-1.5 text-xs text-muted-foreground">
+            Requires Tesseract.
+            <Button
+              onClick={handleInstallTesseract}
+              variant="ghost"
+              size="sm"
+              className="ml-1 h-auto px-2 py-0 text-xs text-primary underline hover:bg-accent"
+            >
+              Install Tesseract
+            </Button>
           </p>
         </div>
       </div>
