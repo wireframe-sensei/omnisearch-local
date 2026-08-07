@@ -8,6 +8,7 @@ import { OllamaProvider } from "@/lib/ollama-context";
 import { applyGlobalShortcut } from "@/lib/hotkey";
 import { DEFAULT_HOTKEY, getGlobalHotkeyPreference } from "@/lib/settings-store";
 import { promptForFilePermissions } from "@/lib/permissions";
+import { ensureStoreInitialized } from "@/lib/settings-store";
 
 function App() {
   const [windowLabel, setWindowLabel] = useState<string>("");
@@ -23,18 +24,24 @@ function App() {
   // here (indexed directories, Ollama model) that's applied on mount rather than read
   // synchronously by the backend at launch.
   useEffect(() => {
-    getGlobalHotkeyPreference().then((hotkey) => {
-      if (hotkey === DEFAULT_HOTKEY) return;
-      applyGlobalShortcut(hotkey).catch(() => {
-        // Stored shortcut no longer registers (e.g. now held by another app) - fall
-        // back silently to whatever the backend already has bound (the default).
-      });
-    });
+    (async () => {
+      // Initialize settings store first
+      await ensureStoreInitialized();
 
-    // Only prompt for permissions on the main window on first load
-    if (getCurrentWindow().label === "main") {
-      promptForFilePermissions().catch(() => {});
-    }
+      // Then apply hotkey preference
+      const hotkey = await getGlobalHotkeyPreference();
+      if (hotkey !== DEFAULT_HOTKEY) {
+        applyGlobalShortcut(hotkey).catch(() => {
+          // Stored shortcut no longer registers (e.g. now held by another app) - fall
+          // back silently to whatever the backend already has bound (the default).
+        });
+      }
+
+      // Only prompt for permissions on the main window on first load
+      if (getCurrentWindow().label === "main") {
+        promptForFilePermissions().catch(() => {});
+      }
+    })();
   }, []);
 
   // Escape handling differs by window: Search dismisses it, Settings just closes
