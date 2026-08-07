@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { SearchView } from "@/components/SearchView";
 import { SettingsView } from "@/components/SettingsView";
 import { IndexingProvider } from "@/lib/indexing-context";
@@ -10,6 +11,11 @@ import { promptForFilePermissions } from "@/lib/permissions";
 import { ensureStoreInitialized } from "@/lib/settings-store";
 
 type View = "search" | "settings";
+
+const SEARCH_WINDOW_WIDTH = 680;
+const SEARCH_WINDOW_HEIGHT = 500;
+const SETTINGS_WINDOW_WIDTH = 1000;
+const SETTINGS_WINDOW_HEIGHT = 700;
 
 function App() {
   const [view, setView] = useState<View>("search");
@@ -38,6 +44,27 @@ function App() {
       promptForFilePermissions().catch(() => {});
     })();
   }, []);
+
+  // Resize and center window when switching views
+  useEffect(() => {
+    if (view === "settings") {
+      // Expand to settings size
+      invoke("resize_window", {
+        width: SETTINGS_WINDOW_WIDTH,
+        height: SETTINGS_WINDOW_HEIGHT,
+      }).catch((e) => {
+        console.error("Failed to resize window to settings size:", e);
+      });
+    } else {
+      // Shrink back to search size
+      invoke("resize_window", {
+        width: SEARCH_WINDOW_WIDTH,
+        height: SEARCH_WINDOW_HEIGHT,
+      }).catch((e) => {
+        console.error("Failed to resize window to search size:", e);
+      });
+    }
+  }, [view]);
 
   // Escape: on Search, dismiss window; from Settings, step back to Search
   useEffect(() => {

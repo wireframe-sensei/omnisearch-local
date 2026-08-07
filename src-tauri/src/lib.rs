@@ -63,6 +63,18 @@ fn hide_main_window(app: &AppHandle) {
     }
 }
 
+#[tauri::command]
+fn resize_window(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
+        use winit::dpi::LogicalSize;
+        window
+            .set_size(LogicalSize::new(width, height))
+            .map_err(|e| e.to_string())?;
+        window.center().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 fn toggle_main_window(app: &AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -177,6 +189,7 @@ pub fn run() {
             ollama::stream_ollama_answer,
             ollama::cancel_ollama_answer,
             set_global_shortcut,
+            resize_window,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
