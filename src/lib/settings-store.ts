@@ -68,3 +68,16 @@ export async function setImageExtractionEnabled(enabled: boolean): Promise<void>
   await settingsStore.set(IMAGE_EXTRACTION_KEY, enabled);
   await settingsStore.save();
 }
+
+const PERMISSIONS_PROMPTED_KEY = "permissionsPrompted";
+
+export async function hasPromptedForPermissions(): Promise<boolean> {
+  await ensureStoreInitialized();
+  return (await settingsStore.get<boolean>(PERMISSIONS_PROMPTED_KEY)) ?? false;
+}
+
+export async function setPermissionsPrompted(): Promise<void> {
+  await ensureStoreInitialized();
+  await settingsStore.set(PERMISSIONS_PROMPTED_KEY, true);
+  await settingsStore.save();
+}

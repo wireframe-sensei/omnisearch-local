@@ -8,7 +8,7 @@ import { OllamaProvider } from "@/lib/ollama-context";
 import { applyGlobalShortcut } from "@/lib/hotkey";
 import { DEFAULT_HOTKEY, getGlobalHotkeyPreference } from "@/lib/settings-store";
 import { promptForFilePermissions } from "@/lib/permissions";
-import { ensureStoreInitialized } from "@/lib/settings-store";
+import { ensureStoreInitialized, hasPromptedForPermissions, setPermissionsPrompted } from "@/lib/settings-store";
 
 type View = "search" | "settings";
 
@@ -40,8 +40,12 @@ function App() {
         });
       }
 
-      // Prompt for permissions on first load
-      promptForFilePermissions().catch(() => {});
+      // Only prompt for permissions once, on first launch
+      const alreadyPrompted = await hasPromptedForPermissions();
+      if (!alreadyPrompted) {
+        await setPermissionsPrompted();
+        promptForFilePermissions().catch(() => {});
+      }
     })();
   }, []);
 
