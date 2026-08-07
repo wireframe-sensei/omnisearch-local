@@ -67,9 +67,22 @@ fn hide_main_window(app: &AppHandle) {
 fn resize_window(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("main") {
         use winit::dpi::LogicalSize;
+        // First center the window
+        window.center().map_err(|e| e.to_string())?;
+        // Then resize
         window
             .set_size(LogicalSize::new(width, height))
             .map_err(|e| e.to_string())?;
+        // Center again after resize to ensure proper positioning
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        window.center().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn center_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("main") {
         window.center().map_err(|e| e.to_string())?;
     }
     Ok(())
@@ -190,6 +203,7 @@ pub fn run() {
             ollama::cancel_ollama_answer,
             set_global_shortcut,
             resize_window,
+            center_window,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

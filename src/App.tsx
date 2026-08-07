@@ -56,13 +56,18 @@ function App() {
         console.error("Failed to resize window to settings size:", e);
       });
     } else {
-      // Shrink back to search size
+      // Shrink back to search size and ensure it's centered
       invoke("resize_window", {
         width: SEARCH_WINDOW_WIDTH,
         height: SEARCH_WINDOW_HEIGHT,
-      }).catch((e) => {
-        console.error("Failed to resize window to search size:", e);
-      });
+      })
+        .then(() => {
+          // Additional center call to ensure proper positioning
+          return invoke("center_window");
+        })
+        .catch((e) => {
+          console.error("Failed to resize/center window:", e);
+        });
     }
   }, [view]);
 
