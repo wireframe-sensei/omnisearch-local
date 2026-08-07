@@ -15,6 +15,8 @@ import {
   TriangleAlert,
   Database,
   Brain,
+  X,
+  Eye,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LoadingDots } from "@/components/LoadingDots";
@@ -79,6 +81,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const [imageExtractionEnabled, setImageExtractionEnabledState] = useState<boolean | null>(null);
   const [imageExtractionBusy, setImageExtractionBusy] = useState(false);
   const [activeSection, setActiveSection] = useState<SettingsSection>("directories");
+  const [selectedFailure, setSelectedFailure] = useState<IndexFailure | null>(null);
 
   // Settings is exactly where a newly-pulled model would need to show up, so
   // re-check every time this view opens rather than relying on stale app-launch state.
@@ -421,46 +424,152 @@ export function SettingsView({ onBack }: SettingsViewProps) {
 
               {failures.length > 0 && (
                 <div className="mt-8 border-t border-border pt-6">
-                  <p className="mb-3 flex items-center gap-2 text-sm font-medium text-destructive">
+                  <p className="mb-4 flex items-center gap-2 text-sm font-medium text-destructive">
                     <TriangleAlert className="size-4" />
                     Couldn't index {failures.length} file{failures.length === 1 ? "" : "s"}
                   </p>
-                  <ul className="space-y-2">
-                    {failures.map((failure) => (
-                      <li key={failure.path} className="rounded-md border border-border bg-destructive/5 p-4">
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="truncate text-sm font-medium text-foreground" title={failure.path}>
-                            {failure.fileName}
-                          </span>
-                          {selectedModel && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => handleExplain(failure)}
-                            >
-                              <Sparkles className="size-4" />
-                              Explain
-                            </Button>
-                          )}
+                  <div className="overflow-x-auto rounded-lg border border-border">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border bg-muted/30">
+                          <th className="px-4 py-3 text-left font-medium text-foreground">File</th>
+                          <th className="px-4 py-3 text-left font-medium text-foreground">Error</th>
+                          <th className="px-4 py-3 text-right font-medium text-foreground">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {failures.map((failure) => (
+                          <tr key={failure.path} className="border-b border-border hover:bg-muted/20">
+                            <td className="px-4 py-3 font-medium text-foreground">
+                              <span title={failure.path} className="truncate block">
+                                {failure.fileName}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-muted-foreground">
+                              <span title={failure.message} className="truncate block">
+                                {failure.message}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => setSelectedFailure(failure)}
+                                  title="View full details"
+                                >
+                                  <Eye className="size-4" />
+                                </Button>
+                                {selectedModel && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleExplain(failure)}
+                                    title="Explain error with AI"
+                                  >
+                                    <Sparkles className="size-4" />
+                                  </Button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* Failure Details Drawer */}
+              {selectedFailure && (
+                <div className="fixed inset-0 z-50 flex">
+                  {/* Overlay */}
+                  <div
+                    className="flex-1 bg-black/50"
+                    onClick={() => setSelectedFailure(null)}
+                  />
+                  {/* Drawer */}
+                  <div className="w-96 flex flex-col bg-background shadow-lg">
+                    {/* Header */}
+                    <div className="flex items-center justify-between border-b border-border px-6 py-4">
+                      <h3 className="text-lg font-semibold text-foreground">Error Details</h3>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setSelectedFailure(null)}
+                        aria-label="Close drawer"
+                      >
+                        <X className="size-5" />
+                      </Button>
+                    </div>
+
+                    {/* Content */}
+                    <div className="flex-1 overflow-y-auto px-6 py-4">
+                      <div className="space-y-4">
+                        <div>
+                          <p className="mb-1 text-xs font-medium uppercase text-muted-foreground">
+                            File
+                          </p>
+                          <p
+                            className="break-all rounded bg-muted/30 px-3 py-2 text-sm font-mono text-foreground"
+                            title={selectedFailure.path}
+                          >
+                            {selectedFailure.path}
+                          </p>
                         </div>
-                        <p className="mt-1 truncate text-sm text-muted-foreground" title={failure.message}>
-                          {failure.message}
-                        </p>
-                        {explanation?.path === failure.path && (
-                          <div className="mt-2 rounded-md bg-accent px-3 py-2 text-sm text-accent-foreground">
-                            {explanation.error ? (
-                              <span className="text-destructive">{explanation.error}</span>
-                            ) : (
-                              <>
-                                {explanation.text}
-                                {explanation.loading && <LoadingDots />}
-                              </>
-                            )}
+
+                        <div>
+                          <p className="mb-1 text-xs font-medium uppercase text-muted-foreground">
+                            Error Message
+                          </p>
+                          <p className="break-words rounded bg-muted/30 px-3 py-2 text-sm text-foreground whitespace-pre-wrap">
+                            {selectedFailure.message}
+                          </p>
+                        </div>
+
+                        {explanation?.path === selectedFailure.path && (
+                          <div>
+                            <p className="mb-1 text-xs font-medium uppercase text-muted-foreground">
+                              AI Explanation
+                            </p>
+                            <div className="rounded bg-accent px-3 py-2 text-sm text-accent-foreground whitespace-pre-wrap">
+                              {explanation.error ? (
+                                <span className="text-destructive">{explanation.error}</span>
+                              ) : (
+                                <>
+                                  {explanation.text}
+                                  {explanation.loading && <LoadingDots />}
+                                </>
+                              )}
+                            </div>
                           </div>
                         )}
-                      </li>
-                    ))}
-                  </ul>
+                      </div>
+                    </div>
+
+                    {/* Footer */}
+                    <div className="border-t border-border px-6 py-3">
+                      {selectedModel && !explanation?.path.includes(selectedFailure.path) && (
+                        <Button
+                          onClick={() => handleExplain(selectedFailure)}
+                          className="w-full"
+                          variant="outline"
+                        >
+                          <Sparkles className="size-4" />
+                          Get AI Explanation
+                        </Button>
+                      )}
+                      {explanation?.path === selectedFailure.path && !explanation.error && (
+                        <Button
+                          onClick={() => setExplanation(null)}
+                          className="w-full"
+                          variant="outline"
+                        >
+                          Clear Explanation
+                        </Button>
+                      )}
+                    </div>
+                  </div>
                 </div>
               )}
 
