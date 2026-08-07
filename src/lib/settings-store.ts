@@ -38,3 +38,14 @@ export async function setGlobalHotkeyPreference(hotkey: string): Promise<void> {
   await settingsStore.set(HOTKEY_KEY, hotkey);
   await settingsStore.save();
 }
+
+const IMAGE_EXTRACTION_KEY = "extractImageText";
+
+export async function getImageExtractionEnabled(): Promise<boolean> {
+  return (await settingsStore.get<boolean>(IMAGE_EXTRACTION_KEY)) ?? false;
+}
+
+export async function setImageExtractionEnabled(enabled: boolean): Promise<void> {
+  await settingsStore.set(IMAGE_EXTRACTION_KEY, enabled);
+  await settingsStore.save();
+}

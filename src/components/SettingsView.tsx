@@ -21,7 +21,7 @@ import { useOllama } from "@/lib/ollama-context";
 import { cancelOllamaAnswer, streamOllamaAnswer } from "@/lib/ollama";
 import { buildErrorExplanationPrompt } from "@/lib/error-explainer";
 import { applyGlobalShortcut, formatShortcut, shortcutFromKeyboardEvent } from "@/lib/hotkey";
-import { getGlobalHotkeyPreference, setGlobalHotkeyPreference } from "@/lib/settings-store";
+import { getGlobalHotkeyPreference, setGlobalHotkeyPreference, getImageExtractionEnabled, setImageExtractionEnabled } from "@/lib/settings-store";
 import { promptForFilePermissions } from "@/lib/permissions";
 import type { IndexFailure } from "@/lib/indexer";
 
@@ -67,6 +67,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const hotkeyErrorTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [autostartEnabled, setAutostartEnabled] = useState<boolean | null>(null);
   const [autostartBusy, setAutostartBusy] = useState(false);
+  const [imageExtractionEnabled, setImageExtractionEnabledState] = useState<boolean | null>(null);
+  const [imageExtractionBusy, setImageExtractionBusy] = useState(false);
 
   // Settings is exactly where a newly-pulled model would need to show up, so
   // re-check every time this view opens rather than relying on stale app-launch state.
@@ -95,6 +97,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   useEffect(() => {
     getGlobalHotkeyPreference().then(setHotkey);
     isAutostartEnabled().then(setAutostartEnabled);
+    getImageExtractionEnabled().then(setImageExtractionEnabledState);
   }, []);
 
   // Captures the next key combo while recording, rather than relying on a form input -
@@ -145,6 +148,17 @@ export function SettingsView({ onBack }: SettingsViewProps) {
       }
     } finally {
       setAutostartBusy(false);
+    }
+  }
+
+  async function handleToggleImageExtraction() {
+    setImageExtractionBusy(true);
+    try {
+      const newState = !imageExtractionEnabled;
+      await setImageExtractionEnabled(newState);
+      setImageExtractionEnabledState(newState);
+    } finally {
+      setImageExtractionBusy(false);
     }
   }
 
@@ -467,6 +481,26 @@ export function SettingsView({ onBack }: SettingsViewProps) {
             />
             Launch OmniSearch at login
           </label>
+        </div>
+
+        <div className="mt-4 border-t border-border pt-4">
+          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <Sparkles className="size-3.5" />
+            <span>Image Indexing</span>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-foreground">
+            <input
+              type="checkbox"
+              checked={imageExtractionEnabled ?? false}
+              disabled={imageExtractionEnabled === null || imageExtractionBusy}
+              onChange={handleToggleImageExtraction}
+              className="size-4 rounded border-input"
+            />
+            Extract text from images
+          </label>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Requires tesseract. Install with: <code className="bg-accent px-1 py-0.5 rounded text-[11px]">brew install tesseract</code> (macOS)
+          </p>
         </div>
       </div>
 

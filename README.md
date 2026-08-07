@@ -49,6 +49,7 @@ Type a description of what you're looking for - *"notes about the budget meeting
 - **Storage:** SQLite via `rusqlite` (bundled, zero system dependencies)
 - **Search:** BM25 implemented in Rust + Reciprocal Rank Fusion with embedding similarity
 - **File parsing:** `pdf-extract`, `html2text`, `rtf-parser`, `calamine` (xlsx), `zip`/`quick-xml` (docx/pptx)
+- **Optional OCR:** [Tesseract](https://github.com/UB-Mannheim/tesseract/wiki) (called as external process for image text extraction)
 - **Optional LLM:** [Ollama](https://ollama.com)'s local HTTP API, streamed via `reqwest`
 
 ## Prerequisites
@@ -56,6 +57,7 @@ Type a description of what you're looking for - *"notes about the budget meeting
 - [Node.js](https://nodejs.org/) (v20+) and [pnpm](https://pnpm.io/)
 - [Rust](https://www.rust-lang.org/tools/install) (stable toolchain, via `rustup`)
 - Tauri's platform-specific dependencies - follow the [Tauri prerequisites guide](https://tauri.app/start/prerequisites/) for your OS (Xcode Command Line Tools on macOS, WebView2 on Windows, standard build tools + WebKitGTK on Linux)
+- Optional, for OCR on images: [Tesseract](https://github.com/UB-Mannheim/tesseract/wiki) (enable in Settings; install via `brew install tesseract` on macOS, `apt install tesseract-ocr` on Linux, or [download](https://github.com/UB-Mannheim/tesseract/wiki/Downloads) on Windows)
 - Optional, for AI answers: [Ollama](https://ollama.com) installed and running locally, with at least one model pulled (e.g. `ollama pull llama3.2`)
 
 ## Getting started
