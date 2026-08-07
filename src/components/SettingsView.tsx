@@ -19,7 +19,9 @@ import {
   X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Switch } from "@/components/ui/switch";
 import { LoadingDots } from "@/components/LoadingDots";
+import { invoke } from "@tauri-apps/api/core";
 import { useIndexing } from "@/lib/indexing-context";
 import { useOllama } from "@/lib/ollama-context";
 import { cancelOllamaAnswer, streamOllamaAnswer } from "@/lib/ollama";
@@ -78,10 +80,15 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const [imageExtractionBusy, setImageExtractionBusy] = useState(false);
   const [activeSection, setActiveSection] = useState<SettingsSection>("directories");
   const [selectedFailure, setSelectedFailure] = useState<IndexFailure | null>(null);
+  const [tesseractInstalled, setTesseractInstalled] = useState<boolean | null>(null);
 
   // Settings window is independent, so re-check Ollama state when opening
   useEffect(() => {
     refreshOllama();
+    // Check if Tesseract is installed
+    invoke<boolean>("check_tesseract_installed")
+      .then((installed) => setTesseractInstalled(installed))
+      .catch(() => setTesseractInstalled(false));
   }, []);
 
   // Cancel any in-flight explanation if the view unmounts mid-stream.
@@ -666,48 +673,50 @@ export function SettingsView({ onBack }: SettingsViewProps) {
                 </div>
 
                 <div className="rounded-lg border border-border bg-card p-6">
-                  <div className="mb-4 flex items-center gap-3">
-                    <Power className="size-5 text-muted-foreground" />
-                    <h3 className="text-lg font-semibold text-foreground">Startup</h3>
-                  </div>
-                  <label className="flex items-center gap-3">
-                    <input
-                      type="checkbox"
+                  <div className="mb-4 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <Power className="size-5 text-muted-foreground" />
+                      <h3 className="text-lg font-semibold text-foreground">Startup</h3>
+                    </div>
+                    <Switch
                       checked={autostartEnabled ?? false}
                       disabled={autostartEnabled === null || autostartBusy}
-                      onChange={handleToggleAutostart}
-                      className="size-5 rounded border-input"
+                      onCheckedChange={handleToggleAutostart}
                     />
-                    <span className="text-sm text-foreground">Launch OmniSearch when you log in</span>
-                  </label>
+                  </div>
+                  <p className="text-sm text-muted-foreground">Launch OmniSearch when you log in</p>
                 </div>
 
                 <div className="rounded-lg border border-border bg-card p-6">
-                  <div className="mb-4 flex items-center gap-3">
-                    <Sparkles className="size-5 text-muted-foreground" />
-                    <h3 className="text-lg font-semibold text-foreground">Image Indexing</h3>
-                  </div>
-                  <label className="mb-3 flex items-center gap-3">
-                    <input
-                      type="checkbox"
+                  <div className="mb-4 flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <Sparkles className="size-5 text-muted-foreground" />
+                      <h3 className="text-lg font-semibold text-foreground">Image Indexing</h3>
+                    </div>
+                    <Switch
                       checked={imageExtractionEnabled ?? false}
-                      disabled={imageExtractionEnabled === null || imageExtractionBusy}
-                      onChange={handleToggleImageExtraction}
-                      className="size-5 rounded border-input"
+                      disabled={imageExtractionEnabled === null || imageExtractionBusy || !tesseractInstalled}
+                      onCheckedChange={handleToggleImageExtraction}
                     />
-                    <span className="text-sm text-foreground">Extract text from images using OCR</span>
-                  </label>
-                  <p className="text-sm text-muted-foreground">
-                    Requires Tesseract OCR engine.
-                    <Button
-                      onClick={handleInstallTesseract}
-                      variant="ghost"
-                      size="sm"
-                      className="ml-2 h-auto px-2 py-0 text-sm text-primary underline hover:bg-accent"
-                    >
-                      Install Tesseract
-                    </Button>
-                  </p>
+                  </div>
+                  <p className="mb-3 text-sm text-muted-foreground">Extract text from images using OCR</p>
+                  {tesseractInstalled ? (
+                    <p className="text-xs text-green-600">✓ Tesseract is installed</p>
+                  ) : tesseractInstalled === null ? (
+                    <p className="text-xs text-muted-foreground">Checking for Tesseract...</p>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">
+                      Tesseract is not installed.
+                      <Button
+                        onClick={handleInstallTesseract}
+                        variant="ghost"
+                        size="sm"
+                        className="ml-2 h-auto px-2 py-0 text-sm text-primary underline hover:bg-accent"
+                      >
+                        Install Tesseract
+                      </Button>
+                    </p>
+                  )}
                 </div>
               </div>
             </div>

@@ -5,6 +5,7 @@ mod store;
 mod watcher;
 
 use std::sync::Mutex;
+use std::process::Command;
 use tauri::{
     menu::{Menu, MenuItem},
     tray::TrayIconBuilder,
@@ -86,6 +87,17 @@ fn center_window(app: AppHandle) -> Result<(), String> {
         window.center().map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+fn check_tesseract_installed() -> Result<bool, String> {
+    // Try to run tesseract --version to check if it's installed
+    let output = Command::new("tesseract")
+        .arg("--version")
+        .output()
+        .map_err(|_| "Tesseract not found".to_string())?;
+
+    Ok(output.status.success())
 }
 
 fn toggle_main_window(app: &AppHandle) {
@@ -204,6 +216,7 @@ pub fn run() {
             set_global_shortcut,
             resize_window,
             center_window,
+            check_tesseract_installed,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
