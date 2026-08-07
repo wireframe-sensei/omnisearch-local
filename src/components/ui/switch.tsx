@@ -6,7 +6,7 @@ interface SwitchProps extends React.InputHTMLAttributes<HTMLInputElement> {
 }
 
 const Switch = forwardRef<HTMLInputElement, SwitchProps>(
-  ({ checked, onCheckedChange, className, ...props }, ref) => {
+  ({ checked, onCheckedChange, ...props }, ref) => {
     return (
       <label className="inline-flex items-center cursor-pointer">
         <input
@@ -18,11 +18,7 @@ const Switch = forwardRef<HTMLInputElement, SwitchProps>(
           {...props}
         />
         <div
-          className={`relative w-11 h-6 rounded-full transition-colors duration-200 peer-focus:outline-none peer-focus:ring-2 after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-transform ${
-            checked
-              ? "bg-blue-500 peer-focus:ring-blue-500 after:translate-x-5"
-              : "bg-gray-400 peer-focus:ring-gray-400 after:translate-x-0"
-          }`}
+          className="relative w-11 h-6 rounded-full transition-colors duration-200 peer-checked:bg-blue-500 peer-checked:after:translate-x-5 bg-gray-400 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-offset-0 after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-transform after:translate-x-0"
         />
       </label>
     );
