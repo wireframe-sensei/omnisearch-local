@@ -17,9 +17,15 @@ const Switch = forwardRef<HTMLInputElement, SwitchProps>(
           className="sr-only peer"
           {...props}
         />
-        <div className={`relative w-11 h-6 rounded-full peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-ring transition-colors ${
-          checked ? "bg-primary" : "bg-muted-foreground"
-        } peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:border after:border-gray-300 after:rounded-full after:h-5 after:w-5 after:transition-all`} />
+        <div
+          className={`relative w-11 h-6 rounded-full transition-colors duration-200 ${
+            checked
+              ? "bg-blue-500 peer-focus:ring-blue-500"
+              : "bg-gray-400 peer-focus:ring-gray-400"
+          } peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-offset-0 after:content-[''] after:absolute after:top-0.5 after:left-0.5 after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all ${
+            checked ? "after:translate-x-5" : "after:translate-x-0"
+          }`}
+        />
       </label>
     );
   }
