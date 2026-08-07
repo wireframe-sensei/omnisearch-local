@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { homeDir } from "@tauri-apps/api/path";
+import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
 import {
   ArrowLeft,
   FolderPlus,
   FolderX,
   FolderClosed,
   House,
+  Keyboard,
+  Power,
   RefreshCw,
   Sparkles,
   TriangleAlert,
@@ -17,6 +20,9 @@ import { useIndexing } from "@/lib/indexing-context";
 import { useOllama } from "@/lib/ollama-context";
 import { cancelOllamaAnswer, streamOllamaAnswer } from "@/lib/ollama";
 import { buildErrorExplanationPrompt } from "@/lib/error-explainer";
+import { applyGlobalShortcut, formatShortcut, shortcutFromKeyboardEvent } from "@/lib/hotkey";
+import { getGlobalHotkeyPreference, setGlobalHotkeyPreference } from "@/lib/settings-store";
+import { promptForFilePermissions } from "@/lib/permissions";
 import type { IndexFailure } from "@/lib/indexer";
 
 interface SettingsViewProps {
@@ -55,11 +61,19 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const [explanation, setExplanation] = useState<Explanation | null>(null);
   const [confirmingRebuild, setConfirmingRebuild] = useState(false);
   const rebuildConfirmTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [hotkey, setHotkey] = useState<string | null>(null);
+  const [recordingHotkey, setRecordingHotkey] = useState(false);
+  const [hotkeyError, setHotkeyError] = useState<string | null>(null);
+  const hotkeyErrorTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [autostartEnabled, setAutostartEnabled] = useState<boolean | null>(null);
+  const [autostartBusy, setAutostartBusy] = useState(false);
 
   // Settings is exactly where a newly-pulled model would need to show up, so
   // re-check every time this view opens rather than relying on stale app-launch state.
+  // Also prompt for file permissions if they haven't been granted yet.
   useEffect(() => {
     refreshOllama();
+    promptForFilePermissions().catch(() => {});
   }, []);
 
   // Cancel any in-flight explanation if the view unmounts mid-stream.
@@ -74,8 +88,65 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   useEffect(() => {
     return () => {
       if (rebuildConfirmTimeout.current) clearTimeout(rebuildConfirmTimeout.current);
+      if (hotkeyErrorTimeout.current) clearTimeout(hotkeyErrorTimeout.current);
     };
   }, []);
+
+  useEffect(() => {
+    getGlobalHotkeyPreference().then(setHotkey);
+    isAutostartEnabled().then(setAutostartEnabled);
+  }, []);
+
+  // Captures the next key combo while recording, rather than relying on a form input -
+  // this needs the raw modifier + code info a text input can't give us. Runs in the
+  // capture phase and stops propagation so App's Escape handler (which would otherwise
+  // close Settings) doesn't also fire for the same keypress.
+  useEffect(() => {
+    if (!recordingHotkey) return;
+
+    function handleKeyDown(e: KeyboardEvent) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (e.key === "Escape") {
+        setRecordingHotkey(false);
+        return;
+      }
+
+      const combo = shortcutFromKeyboardEvent(e);
+      if (!combo) return;
+
+      setRecordingHotkey(false);
+      applyGlobalShortcut(combo)
+        .then(async () => {
+          await setGlobalHotkeyPreference(combo);
+          setHotkey(combo);
+        })
+        .catch(() => {
+          setHotkeyError("That shortcut is already in use by another app.");
+          if (hotkeyErrorTimeout.current) clearTimeout(hotkeyErrorTimeout.current);
+          hotkeyErrorTimeout.current = setTimeout(() => setHotkeyError(null), 4000);
+        });
+    }
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [recordingHotkey]);
+
+  async function handleToggleAutostart() {
+    setAutostartBusy(true);
+    try {
+      if (autostartEnabled) {
+        await disableAutostart();
+        setAutostartEnabled(false);
+      } else {
+        await enableAutostart();
+        setAutostartEnabled(true);
+      }
+    } finally {
+      setAutostartBusy(false);
+    }
+  }
 
   // Two-click confirm rather than a modal: forcing a full rebuild re-embeds every file
   // regardless of whether it changed, which can take a while on a large index, so it
@@ -359,6 +430,43 @@ export function SettingsView({ onBack }: SettingsViewProps) {
               </select>
             </div>
           )}
+        </div>
+
+        <div className="mt-4 border-t border-border pt-4">
+          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <Keyboard className="size-3.5" />
+            <span>Global shortcut</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setRecordingHotkey(true)}
+            disabled={recordingHotkey}
+            className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-left text-sm text-foreground outline-none hover:bg-accent disabled:opacity-50"
+          >
+            {recordingHotkey
+              ? "Press a key combo… (Esc to cancel)"
+              : hotkey
+                ? formatShortcut(hotkey)
+                : "Loading…"}
+          </button>
+          {hotkeyError && <p className="mt-1 text-xs text-destructive">{hotkeyError}</p>}
+        </div>
+
+        <div className="mt-4 border-t border-border pt-4">
+          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+            <Power className="size-3.5" />
+            <span>Startup</span>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-foreground">
+            <input
+              type="checkbox"
+              checked={autostartEnabled ?? false}
+              disabled={autostartEnabled === null || autostartBusy}
+              onChange={handleToggleAutostart}
+              className="size-4 rounded border-input"
+            />
+            Launch OmniSearch at login
+          </label>
         </div>
       </div>
 

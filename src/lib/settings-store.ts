@@ -23,3 +23,18 @@ export async function setOllamaModelPreference(model: string): Promise<void> {
   await settingsStore.set(OLLAMA_MODEL_KEY, model);
   await settingsStore.save();
 }
+
+const HOTKEY_KEY = "globalHotkey";
+
+// Must match SUMMON_SHORTCUT in src-tauri/src/lib.rs - that's what's actually
+// registered at app startup before this stored value (if different) gets applied.
+export const DEFAULT_HOTKEY = "Alt+Shift+Space";
+
+export async function getGlobalHotkeyPreference(): Promise<string> {
+  return (await settingsStore.get<string>(HOTKEY_KEY)) ?? DEFAULT_HOTKEY;
+}
+
+export async function setGlobalHotkeyPreference(hotkey: string): Promise<void> {
+  await settingsStore.set(HOTKEY_KEY, hotkey);
+  await settingsStore.save();
+}

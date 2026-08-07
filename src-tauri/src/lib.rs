@@ -10,12 +10,52 @@ use tauri::{
     tray::TrayIconBuilder,
     AppHandle, Manager, RunEvent, WindowEvent,
 };
+use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 /// Summons or dismisses the search window, mirroring launchers like Spotlight/Raycast.
 /// Avoids Cmd+Space (macOS Spotlight), Cmd+Shift+Space (1Password's default quick-access
 /// shortcut), and bare Alt+Space (Windows' window system menu).
 const SUMMON_SHORTCUT: &str = "Alt+Shift+Space";
+
+/// Tracks whichever shortcut is currently bound, so `set_global_shortcut` knows what to
+/// unregister and can fall back to it if the requested replacement fails (e.g. already
+/// held by another app) rather than leaving the app with no hotkey at all.
+struct ActiveShortcut(Mutex<String>);
+
+fn register_summon_shortcut(app: &AppHandle, shortcut: &str) -> Result<(), String> {
+    app.global_shortcut()
+        .on_shortcut(shortcut, |app, _shortcut, event| {
+            if event.state == ShortcutState::Pressed {
+                toggle_main_window(app);
+            }
+        })
+        .map_err(|e| e.to_string())
+}
+
+/// Unregisters whatever shortcut is currently bound and registers `shortcut` in its
+/// place. Falls back to re-registering the previous shortcut on failure (e.g. the
+/// requested combo is already held by another app), so the app never ends up with no
+/// hotkey at all.
+#[tauri::command]
+fn set_global_shortcut(
+    app: AppHandle,
+    state: tauri::State<ActiveShortcut>,
+    shortcut: String,
+) -> Result<(), String> {
+    let mut current = state.0.lock().unwrap();
+    let _ = app.global_shortcut().unregister_all();
+    match register_summon_shortcut(&app, &shortcut) {
+        Ok(()) => {
+            *current = shortcut;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = register_summon_shortcut(&app, &current);
+            Err(e)
+        }
+    }
+}
 
 fn hide_main_window(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -42,8 +82,10 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, None))
         .manage(watcher::WatcherState::default())
         .manage(ollama::OllamaState::default())
+        .manage(ActiveShortcut(Mutex::new(SUMMON_SHORTCUT.to_string())))
         .setup(|app| {
             // Run as a menu-bar/tray-only utility (like Spotlight/Raycast/Alfred): no
             // persistent Dock icon while the process is alive, only the tray icon.
@@ -84,15 +126,10 @@ pub fn run() {
 
             // Non-fatal: another process (e.g. a still-running previous `tauri dev`
             // instance) can hold this exact combo. Failing here shouldn't take down
-            // the rest of setup (tray icon, database, etc.) with it.
-            if let Err(e) = app
-                .global_shortcut()
-                .on_shortcut(SUMMON_SHORTCUT, |app, _shortcut, event| {
-                    if event.state == ShortcutState::Pressed {
-                        toggle_main_window(app);
-                    }
-                })
-            {
+            // the rest of setup (tray icon, database, etc.) with it. The frontend may
+            // immediately replace this with a user-configured shortcut on mount (see
+            // `set_global_shortcut`) - this is just what's active until then.
+            if let Err(e) = register_summon_shortcut(app.handle(), SUMMON_SHORTCUT) {
                 eprintln!("Failed to register global shortcut {SUMMON_SHORTCUT}: {e}");
             }
 
@@ -138,6 +175,7 @@ pub fn run() {
             ollama::list_ollama_models,
             ollama::stream_ollama_answer,
             ollama::cancel_ollama_answer,
+            set_global_shortcut,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
