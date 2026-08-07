@@ -30,7 +30,7 @@ import { promptForFilePermissions } from "@/lib/permissions";
 import type { IndexFailure } from "@/lib/indexer";
 
 interface SettingsViewProps {
-  onBack: () => void;
+  onBack: () => Promise<void> | void;
 }
 
 interface Explanation {

@@ -36,9 +36,13 @@ function App() {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
       if (windowLabel === "settings") {
-        invoke("close_settings_window").catch(() => {});
-      } else {
-        getCurrentWindow().hide();
+        invoke("close_settings_window").catch((err) => {
+          console.error("Failed to close settings:", err);
+        });
+      } else if (windowLabel === "main") {
+        getCurrentWindow().hide().catch((err) => {
+          console.error("Failed to hide window:", err);
+        });
       }
     }
     window.addEventListener("keydown", handleKeyDown);
@@ -46,7 +50,9 @@ function App() {
   }, [windowLabel]);
 
   const openSettings = () => {
-    invoke("open_settings_window").catch(() => {});
+    invoke("open_settings_window").catch((e) => {
+      console.error("Failed to open settings window:", e);
+    });
   };
 
   if (windowLabel === "settings") {

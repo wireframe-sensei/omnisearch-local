@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "OmniSearch",
         "width": 680,
         "height": 500,

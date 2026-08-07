@@ -78,19 +78,22 @@ fn toggle_main_window(app: &AppHandle) {
 #[tauri::command]
 fn open_settings_window(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("settings") {
-        // Window already exists, just show and focus it
-        let _ = window.show();
-        let _ = window.set_focus();
+        window.show().map_err(|e| e.to_string())?;
+        window.set_focus().map_err(|e| e.to_string())?;
+        Ok(())
+    } else {
+        Err("Settings window not found".to_string())
     }
-    Ok(())
 }
 
 #[tauri::command]
 fn close_settings_window(app: AppHandle) -> Result<(), String> {
     if let Some(window) = app.get_webview_window("settings") {
-        let _ = window.hide();
+        window.hide().map_err(|e| e.to_string())?;
+        Ok(())
+    } else {
+        Err("Settings window not found".to_string())
     }
-    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
