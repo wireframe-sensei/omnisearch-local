@@ -273,7 +273,7 @@ export function SettingsView({ onBack }: SettingsViewProps) {
               <p className="text-xs text-muted-foreground">
                 {indexProgress.phase === "files"
                   ? indexProgress.total > 0
-                    ? `Indexing ${indexProgress.done}/${indexProgress.total} files…`
+                    ? `Indexing ${indexProgress.done}/${indexProgress.total} files…${imageExtractionEnabled ? " (incl. images)" : ""}`
                     : "Preparing local embedding model (first run downloads it once)…"
                   : `Embedding ${indexProgress.done}/${indexProgress.total} pending chunks…`}
               </p>
