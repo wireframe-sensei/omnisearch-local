@@ -42,6 +42,9 @@ interface Explanation {
 
 type SettingsSection = "directories" | "ai" | "system";
 
+// Track if we've already prompted for permissions in this session to avoid repeated dialogs
+let permissionsPromptedThisSession = false;
+
 export function SettingsView({ onBack }: SettingsViewProps) {
   const {
     directories,
@@ -79,12 +82,16 @@ export function SettingsView({ onBack }: SettingsViewProps) {
 
   // Settings is exactly where a newly-pulled model would need to show up, so
   // re-check every time this view opens rather than relying on stale app-launch state.
-  // Also prompt for file permissions if they haven't been granted yet.
   // Resize window to full-screen settings mode (1000x700).
+  // Only prompt for file permissions once per session (not on every settings open).
   useEffect(() => {
     setWindowSize(1000, 700).catch(() => {});
     refreshOllama();
-    promptForFilePermissions().catch(() => {});
+
+    if (!permissionsPromptedThisSession) {
+      permissionsPromptedThisSession = true;
+      promptForFilePermissions().catch(() => {});
+    }
 
     return () => {
       // Reset to search bar size when leaving settings (680x500)
