@@ -27,6 +27,20 @@
         "hiddenTitle": true,
         "visible": false,
         "backgroundThrottling": "disabled"
+      },
+      {
+        "label": "settings",
+        "title": "OmniSearch Settings",
+        "width": 1000,
+        "height": 700,
+        "minWidth": 800,
+        "minHeight": 600,
+        "center": true,
+        "decorations": true,
+        "transparent": false,
+        "resizable": true,
+        "skipTaskbar": false,
+        "visible": false
       }
     ],
     "macOSPrivateApi": true,

@@ -76,13 +76,19 @@ fn toggle_main_window(app: &AppHandle) {
 }
 
 #[tauri::command]
-fn set_window_size(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
-    if let Some(window) = app.get_webview_window("main") {
-        use winit::dpi::LogicalSize;
-        window
-            .set_size(LogicalSize::new(width, height))
-            .map_err(|e| e.to_string())?;
-        window.center().map_err(|e| e.to_string())?;
+fn open_settings_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("settings") {
+        // Window already exists, just show and focus it
+        let _ = window.show();
+        let _ = window.set_focus();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn close_settings_window(app: AppHandle) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("settings") {
+        let _ = window.hide();
     }
     Ok(())
 }
@@ -146,8 +152,9 @@ pub fn run() {
             }
 
             let show_hide_item = MenuItem::with_id(app, "show_hide", "Show/Hide", true, None::<&str>)?;
+            let settings_item = MenuItem::with_id(app, "settings", "Settings", true, None::<&str>)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let tray_menu = Menu::with_items(app, &[&show_hide_item, &quit_item])?;
+            let tray_menu = Menu::with_items(app, &[&show_hide_item, &settings_item, &quit_item])?;
 
             // A dedicated monochrome icon (black artwork, alpha-only shape) rather than
             // the full-color app icon - macOS treats it as a "template" image and
@@ -164,6 +171,12 @@ pub fn run() {
                 .tooltip("OmniSearch")
                 .on_menu_event(|app, event| match event.id().as_ref() {
                     "show_hide" => toggle_main_window(app),
+                    "settings" => {
+                        if let Some(window) = app.get_webview_window("settings") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -188,7 +201,8 @@ pub fn run() {
             ollama::stream_ollama_answer,
             ollama::cancel_ollama_answer,
             set_global_shortcut,
-            set_window_size,
+            open_settings_window,
+            close_settings_window,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

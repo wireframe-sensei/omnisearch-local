@@ -3,7 +3,6 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { homeDir } from "@tauri-apps/api/path";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as isAutostartEnabled } from "@tauri-apps/plugin-autostart";
 import {
-  ArrowLeft,
   FolderPlus,
   FolderX,
   FolderClosed,
@@ -28,7 +27,6 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { applyGlobalShortcut, formatShortcut, shortcutFromKeyboardEvent } from "@/lib/hotkey";
 import { getGlobalHotkeyPreference, setGlobalHotkeyPreference, getImageExtractionEnabled, setImageExtractionEnabled } from "@/lib/settings-store";
 import { promptForFilePermissions } from "@/lib/permissions";
-import { setWindowSize } from "@/lib/window";
 import type { IndexFailure } from "@/lib/indexer";
 
 interface SettingsViewProps {
@@ -83,23 +81,15 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const [activeSection, setActiveSection] = useState<SettingsSection>("directories");
   const [selectedFailure, setSelectedFailure] = useState<IndexFailure | null>(null);
 
-  // Settings is exactly where a newly-pulled model would need to show up, so
-  // re-check every time this view opens rather than relying on stale app-launch state.
-  // Resize window to full-screen settings mode (1000x700).
-  // Only prompt for file permissions once per session (not on every settings open).
+  // Settings window is independent, so re-check Ollama and prompt for permissions
+  // only once per session (not on every settings open).
   useEffect(() => {
-    setWindowSize(1000, 700).catch(() => {});
     refreshOllama();
 
     if (!permissionsPromptedThisSession) {
       permissionsPromptedThisSession = true;
       promptForFilePermissions().catch(() => {});
     }
-
-    return () => {
-      // Reset to search bar size when leaving settings (680x500)
-      setWindowSize(680, 500).catch(() => {});
-    };
   }, []);
 
   // Cancel any in-flight explanation if the view unmounts mid-stream.
@@ -264,8 +254,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   return (
     <div className="flex h-full flex-col bg-background">
       <div className="flex items-center gap-3 border-b border-border px-6 py-4">
-        <Button variant="ghost" size="icon" onClick={onBack} aria-label="Back to search">
-          <ArrowLeft />
+        <Button variant="ghost" size="icon" onClick={onBack} aria-label="Close settings">
+          <X />
         </Button>
         <h1 className="text-xl font-semibold text-foreground">Settings</h1>
       </div>

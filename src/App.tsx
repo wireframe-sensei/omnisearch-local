@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { SearchView } from "@/components/SearchView";
 import { SettingsView } from "@/components/SettingsView";
 import { IndexingProvider } from "@/lib/indexing-context";
@@ -7,10 +8,12 @@ import { OllamaProvider } from "@/lib/ollama-context";
 import { applyGlobalShortcut } from "@/lib/hotkey";
 import { DEFAULT_HOTKEY, getGlobalHotkeyPreference } from "@/lib/settings-store";
 
-type View = "search" | "settings";
-
 function App() {
-  const [view, setView] = useState<View>("search");
+  const [windowLabel, setWindowLabel] = useState<string>("");
+
+  useEffect(() => {
+    setWindowLabel(getCurrentWindow().label);
+  }, []);
 
   // The backend registers the hardcoded default at startup (see SUMMON_SHORTCUT in
   // src-tauri/src/lib.rs) before this JS has even loaded, so the app is summonable
@@ -28,30 +31,41 @@ function App() {
     });
   }, []);
 
-  // Escape mirrors Spotlight: on Search (the root view) it dismisses the window; from
-  // Settings it steps back to Search first, same as most launchers with a sub-view.
+  // Escape handling differs by window: Search dismisses it, Settings just closes
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
-      if (view === "settings") {
-        setView("search");
+      if (windowLabel === "settings") {
+        invoke("close_settings_window").catch(() => {});
       } else {
         getCurrentWindow().hide();
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [view]);
+  }, [windowLabel]);
+
+  const openSettings = () => {
+    invoke("open_settings_window").catch(() => {});
+  };
+
+  if (windowLabel === "settings") {
+    return (
+      <IndexingProvider>
+        <OllamaProvider>
+          <main className="h-screen w-screen overflow-hidden bg-background">
+            <SettingsView onBack={() => invoke("close_settings_window")} />
+          </main>
+        </OllamaProvider>
+      </IndexingProvider>
+    );
+  }
 
   return (
     <IndexingProvider>
       <OllamaProvider>
         <main className="h-screen w-screen overflow-hidden rounded-xl border border-border bg-background shadow-2xl backdrop-blur-xl">
-          {view === "search" ? (
-            <SearchView onOpenSettings={() => setView("settings")} />
-          ) : (
-            <SettingsView onBack={() => setView("search")} />
-          )}
+          <SearchView onOpenSettings={openSettings} />
         </main>
       </OllamaProvider>
     </IndexingProvider>
