@@ -14,8 +14,9 @@ import {
   TriangleAlert,
   Database,
   Brain,
-  X,
   Eye,
+  ArrowLeft,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LoadingDots } from "@/components/LoadingDots";
@@ -29,7 +30,7 @@ import { getGlobalHotkeyPreference, setGlobalHotkeyPreference, getImageExtractio
 import type { IndexFailure } from "@/lib/indexer";
 
 interface SettingsViewProps {
-  onBack: () => Promise<void> | void;
+  onBack: () => void;
 }
 
 interface Explanation {
@@ -245,8 +246,8 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   return (
     <div className="flex h-full flex-col bg-background">
       <div className="flex items-center gap-3 border-b border-border px-6 py-4">
-        <Button variant="ghost" size="icon" onClick={onBack} aria-label="Close settings">
-          <X />
+        <Button variant="ghost" size="icon" onClick={onBack} aria-label="Back to search">
+          <ArrowLeft />
         </Button>
         <h1 className="text-xl font-semibold text-foreground">Settings</h1>
       </div>

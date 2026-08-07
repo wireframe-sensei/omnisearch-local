@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { invoke } from "@tauri-apps/api/core";
 import { SearchView } from "@/components/SearchView";
 import { SettingsView } from "@/components/SettingsView";
 import { IndexingProvider } from "@/lib/indexing-context";
@@ -10,12 +9,10 @@ import { DEFAULT_HOTKEY, getGlobalHotkeyPreference } from "@/lib/settings-store"
 import { promptForFilePermissions } from "@/lib/permissions";
 import { ensureStoreInitialized } from "@/lib/settings-store";
 
-function App() {
-  const [windowLabel, setWindowLabel] = useState<string>("");
+type View = "search" | "settings";
 
-  useEffect(() => {
-    setWindowLabel(getCurrentWindow().label);
-  }, []);
+function App() {
+  const [view, setView] = useState<View>("search");
 
   // The backend registers the hardcoded default at startup (see SUMMON_SHORTCUT in
   // src-tauri/src/lib.rs) before this JS has even loaded, so the app is summonable
@@ -37,54 +34,39 @@ function App() {
         });
       }
 
-      // Only prompt for permissions on the main window on first load
-      if (getCurrentWindow().label === "main") {
-        promptForFilePermissions().catch(() => {});
-      }
+      // Prompt for permissions on first load
+      promptForFilePermissions().catch(() => {});
     })();
   }, []);
 
-  // Escape handling differs by window: Search dismisses it, Settings just closes
+  // Escape: on Search, dismiss window; from Settings, step back to Search
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
-      if (windowLabel === "settings") {
-        invoke("close_settings_window").catch((err) => {
-          console.error("Failed to close settings:", err);
-        });
-      } else if (windowLabel === "main") {
-        getCurrentWindow().hide().catch((err) => {
-          console.error("Failed to hide window:", err);
-        });
+      if (view === "settings") {
+        setView("search");
+      } else {
+        getCurrentWindow().hide();
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [windowLabel]);
+  }, [view]);
 
-  const openSettings = () => {
-    invoke("open_settings_window").catch((e) => {
-      console.error("Failed to open settings window:", e);
-    });
-  };
-
-  if (windowLabel === "settings") {
-    return (
-      <IndexingProvider>
-        <OllamaProvider>
-          <main className="h-screen w-screen overflow-hidden bg-background">
-            <SettingsView onBack={() => invoke("close_settings_window")} />
-          </main>
-        </OllamaProvider>
-      </IndexingProvider>
-    );
-  }
+  const isSearchView = view === "search";
+  const containerClass = isSearchView
+    ? "h-screen w-screen overflow-hidden rounded-xl border border-border bg-background shadow-2xl backdrop-blur-xl"
+    : "h-screen w-screen overflow-hidden bg-background";
 
   return (
     <IndexingProvider>
       <OllamaProvider>
-        <main className="h-screen w-screen overflow-hidden rounded-xl border border-border bg-background shadow-2xl backdrop-blur-xl">
-          <SearchView onOpenSettings={openSettings} />
+        <main className={containerClass}>
+          {isSearchView ? (
+            <SearchView onOpenSettings={() => setView("settings")} />
+          ) : (
+            <SettingsView onBack={() => setView("search")} />
+          )}
         </main>
       </OllamaProvider>
     </IndexingProvider>
