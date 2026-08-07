@@ -13,6 +13,8 @@ import {
   RefreshCw,
   Sparkles,
   TriangleAlert,
+  Database,
+  Brain,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { LoadingDots } from "@/components/LoadingDots";
@@ -24,6 +26,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { applyGlobalShortcut, formatShortcut, shortcutFromKeyboardEvent } from "@/lib/hotkey";
 import { getGlobalHotkeyPreference, setGlobalHotkeyPreference, getImageExtractionEnabled, setImageExtractionEnabled } from "@/lib/settings-store";
 import { promptForFilePermissions } from "@/lib/permissions";
+import { setWindowSize } from "@/lib/window";
 import type { IndexFailure } from "@/lib/indexer";
 
 interface SettingsViewProps {
@@ -36,6 +39,8 @@ interface Explanation {
   loading: boolean;
   error: string | null;
 }
+
+type SettingsSection = "directories" | "ai" | "system";
 
 export function SettingsView({ onBack }: SettingsViewProps) {
   const {
@@ -70,13 +75,21 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   const [autostartBusy, setAutostartBusy] = useState(false);
   const [imageExtractionEnabled, setImageExtractionEnabledState] = useState<boolean | null>(null);
   const [imageExtractionBusy, setImageExtractionBusy] = useState(false);
+  const [activeSection, setActiveSection] = useState<SettingsSection>("directories");
 
   // Settings is exactly where a newly-pulled model would need to show up, so
   // re-check every time this view opens rather than relying on stale app-launch state.
   // Also prompt for file permissions if they haven't been granted yet.
+  // Resize window to full-screen settings mode (1000x700).
   useEffect(() => {
+    setWindowSize(1000, 700).catch(() => {});
     refreshOllama();
     promptForFilePermissions().catch(() => {});
+
+    return () => {
+      // Reset to search bar size when leaving settings (680x500)
+      setWindowSize(680, 500).catch(() => {});
+    };
   }, []);
 
   // Cancel any in-flight explanation if the view unmounts mid-stream.
@@ -239,305 +252,369 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   }
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+    <div className="flex h-full flex-col bg-background">
+      <div className="flex items-center gap-3 border-b border-border px-6 py-4">
         <Button variant="ghost" size="icon" onClick={onBack} aria-label="Back to search">
           <ArrowLeft />
         </Button>
-        <h1 className="text-sm font-semibold text-foreground">Indexed Directories</h1>
+        <h1 className="text-xl font-semibold text-foreground">Settings</h1>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4">
-        {!loading && directories.length > 0 && (
-          <div className="mb-3 space-y-1">
-            <div className="flex items-center gap-1.5">
-              <p className="text-xs text-muted-foreground">
-                {scanning
-                  ? "Scanning…"
-                  : `${fileCount ?? 0} file${fileCount === 1 ? "" : "s"} found across ${
-                      directories.length
-                    } folder${directories.length === 1 ? "" : "s"}`}
-              </p>
-              <button
-                type="button"
-                onClick={() => refreshIndex()}
-                disabled={indexProgress !== null}
-                aria-label="Refresh index"
-                title="Rescan now for changes the file watcher may have missed"
-                className="ml-auto rounded p-0.5 hover:bg-accent disabled:opacity-50"
-              >
-                <RefreshCw className={`size-3.5 ${indexProgress !== null ? "animate-spin" : ""}`} />
-              </button>
-            </div>
-            {indexProgress && (
-              <p className="text-xs text-muted-foreground">
-                {indexProgress.phase === "files"
-                  ? indexProgress.total > 0
-                    ? `Indexing ${indexProgress.done}/${indexProgress.total} files…${imageExtractionEnabled ? " (incl. images)" : ""}`
-                    : "Preparing local embedding model (first run downloads it once)…"
-                  : `Embedding ${indexProgress.done}/${indexProgress.total} pending chunks…`}
-              </p>
-            )}
-            {!indexProgress && indexStats && (
-              <p className="text-xs text-muted-foreground">
-                {indexStats.embeddedChunkCount === indexStats.chunkCount
-                  ? `${indexStats.chunkCount} chunk${indexStats.chunkCount === 1 ? "" : "s"} embedded`
-                  : `${indexStats.embeddedChunkCount}/${indexStats.chunkCount} chunks embedded so far`}{" "}
-                across {indexStats.documentCount} document
-                {indexStats.documentCount === 1 ? "" : "s"}
-              </p>
-            )}
-            {!indexProgress && (
-              <button
-                type="button"
-                onClick={handleRebuildClick}
-                title="Reprocess every file from scratch, even ones that haven't changed - use if you fixed an indexing bug or the index seems stale"
-                className={`text-xs underline decoration-dotted ${
-                  confirmingRebuild
-                    ? "text-destructive"
-                    : "text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {confirmingRebuild
-                  ? "Click again to reprocess every file (may take a while)"
-                  : "Rebuild index from scratch"}
-              </button>
-            )}
-          </div>
-        )}
-        {loading ? (
-          <p className="text-sm text-muted-foreground">Loading…</p>
-        ) : directories.length === 0 ? (
-          <div className="flex h-full flex-col items-center justify-center gap-2 text-center text-muted-foreground">
-            <FolderClosed className="size-8 opacity-50" />
-            <p className="text-sm">No folders selected yet.</p>
-            <p className="text-xs">Add a folder to start indexing its files.</p>
-          </div>
-        ) : (
-          <ul className="flex flex-col gap-1.5">
-            {directories.map((dir) => (
-              <li
-                key={dir}
-                className="flex items-center justify-between gap-2 rounded-md border border-border bg-card px-3 py-2"
-              >
-                <span className="truncate text-sm text-foreground" title={dir}>
-                  {dir}
-                </span>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => removeDirectory(dir)}
-                  aria-label={`Remove ${dir}`}
-                >
-                  <FolderX className="text-destructive" />
-                </Button>
-              </li>
-            ))}
-          </ul>
-        )}
+      <div className="flex flex-1 overflow-hidden">
+        <nav className="w-48 border-r border-border bg-muted/30 px-4 py-6">
+          <button
+            onClick={() => setActiveSection("directories")}
+            className={`mb-2 flex w-full items-center gap-3 rounded-lg px-4 py-3 text-sm font-medium transition ${
+              activeSection === "directories"
+                ? "bg-accent text-accent-foreground"
+                : "text-muted-foreground hover:bg-accent/50"
+            }`}
+          >
+            <Database className="size-4" />
+            Indexed Directories
+          </button>
+          <button
+            onClick={() => setActiveSection("ai")}
+            className={`mb-2 flex w-full items-center gap-3 rounded-lg px-4 py-3 text-sm font-medium transition ${
+              activeSection === "ai"
+                ? "bg-accent text-accent-foreground"
+                : "text-muted-foreground hover:bg-accent/50"
+            }`}
+          >
+            <Brain className="size-4" />
+            AI Answers
+          </button>
+          <button
+            onClick={() => setActiveSection("system")}
+            className={`flex w-full items-center gap-3 rounded-lg px-4 py-3 text-sm font-medium transition ${
+              activeSection === "system"
+                ? "bg-accent text-accent-foreground"
+                : "text-muted-foreground hover:bg-accent/50"
+            }`}
+          >
+            <Power className="size-4" />
+            System
+          </button>
+        </nav>
 
-        {recentChanges.length > 0 && (
-          <div className="mt-4">
-            <p className="mb-1.5 text-xs font-medium text-muted-foreground">
-              Recent activity
-            </p>
-            <ul className="flex flex-col gap-1">
-              {recentChanges.map((change, i) => (
-                <li
-                  key={`${change.path}-${i}`}
-                  className="flex items-center gap-2 truncate text-xs text-muted-foreground"
-                  title={change.path}
-                >
-                  <span className="rounded bg-accent px-1.5 py-0.5 text-[10px] uppercase text-accent-foreground">
-                    {change.kind}
-                  </span>
-                  <span className="truncate">{change.path}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+        <div className="flex-1 overflow-y-auto p-8">
+          {/* Indexed Directories Section */}
+          {activeSection === "directories" && (
+            <div>
+              <h2 className="mb-6 text-2xl font-semibold text-foreground">Indexed Directories</h2>
 
-        {failures.length > 0 && (
-          <div className="mt-4 border-t border-border pt-4">
-            <p className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-              <TriangleAlert className="size-3.5" />
-              Couldn't index {failures.length} file{failures.length === 1 ? "" : "s"}
-            </p>
-            <ul className="flex flex-col gap-1.5">
-              {failures.map((failure) => (
-                <li
-                  key={failure.path}
-                  className="rounded-md border border-border bg-card px-3 py-2"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <span
-                      className="truncate text-sm font-medium text-foreground"
-                      title={failure.path}
+              {!loading && directories.length > 0 && (
+                <div className="mb-8 rounded-lg border border-border bg-card p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <p className="text-sm text-muted-foreground">
+                      {scanning
+                        ? "Scanning…"
+                        : `${fileCount ?? 0} file${fileCount === 1 ? "" : "s"} found across ${
+                            directories.length
+                          } folder${directories.length === 1 ? "" : "s"}`}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => refreshIndex()}
+                      disabled={indexProgress !== null}
+                      aria-label="Refresh index"
+                      title="Rescan now for changes the file watcher may have missed"
+                      className="rounded p-1 hover:bg-accent disabled:opacity-50"
                     >
-                      {failure.fileName}
-                    </span>
-                    {selectedModel && (
+                      <RefreshCw className={`size-5 ${indexProgress !== null ? "animate-spin" : ""}`} />
+                    </button>
+                  </div>
+                  {indexProgress && (
+                    <p className="text-sm text-muted-foreground">
+                      {indexProgress.phase === "files"
+                        ? indexProgress.total > 0
+                          ? `Indexing ${indexProgress.done}/${indexProgress.total} files…${imageExtractionEnabled ? " (incl. images)" : ""}`
+                          : "Preparing local embedding model (first run downloads it once)…"
+                        : `Embedding ${indexProgress.done}/${indexProgress.total} pending chunks…`}
+                    </p>
+                  )}
+                  {!indexProgress && indexStats && (
+                    <p className="text-sm text-muted-foreground">
+                      {indexStats.embeddedChunkCount === indexStats.chunkCount
+                        ? `${indexStats.chunkCount} chunk${indexStats.chunkCount === 1 ? "" : "s"} embedded`
+                        : `${indexStats.embeddedChunkCount}/${indexStats.chunkCount} chunks embedded so far`}{" "}
+                      across {indexStats.documentCount} document
+                      {indexStats.documentCount === 1 ? "" : "s"}
+                    </p>
+                  )}
+                  {!indexProgress && (
+                    <button
+                      type="button"
+                      onClick={handleRebuildClick}
+                      title="Reprocess every file from scratch, even ones that haven't changed - use if you fixed an indexing bug or the index seems stale"
+                      className={`mt-2 text-sm underline decoration-dotted ${
+                        confirmingRebuild
+                          ? "text-destructive"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {confirmingRebuild
+                        ? "Click again to reprocess every file (may take a while)"
+                        : "Rebuild index from scratch"}
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {loading ? (
+                <p className="text-sm text-muted-foreground">Loading…</p>
+              ) : directories.length === 0 ? (
+                <div className="flex flex-col items-center justify-center gap-3 rounded-lg border-2 border-dashed border-border py-12 text-center text-muted-foreground">
+                  <FolderClosed className="size-10 opacity-50" />
+                  <p className="text-base">No folders selected yet.</p>
+                  <p className="text-sm">Add a folder to start indexing its files.</p>
+                </div>
+              ) : (
+                <ul className="space-y-2">
+                  {directories.map((dir) => (
+                    <li
+                      key={dir}
+                      className="flex items-center justify-between gap-3 rounded-md border border-border bg-muted/30 px-4 py-3 hover:bg-muted/50"
+                    >
+                      <span className="truncate text-sm text-foreground" title={dir}>
+                        {dir}
+                      </span>
                       <Button
                         variant="ghost"
                         size="sm"
-                        className="shrink-0"
-                        onClick={() => handleExplain(failure)}
+                        onClick={() => removeDirectory(dir)}
+                        aria-label={`Remove ${dir}`}
                       >
-                        <Sparkles className="size-3" />
-                        Explain
+                        <FolderX className="text-destructive" />
                       </Button>
-                    )}
-                  </div>
-                  <p
-                    className="mt-0.5 truncate text-xs text-muted-foreground"
-                    title={failure.message}
-                  >
-                    {failure.message}
-                  </p>
-                  {explanation?.path === failure.path && (
-                    <div className="mt-1.5 rounded-md bg-accent px-2 py-1.5 text-xs text-accent-foreground">
-                      {explanation.error ? (
-                        <span className="text-destructive">{explanation.error}</span>
-                      ) : (
-                        <>
-                          {explanation.text}
-                          {explanation.loading && <LoadingDots />}
-                        </>
-                      )}
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ul>
-          </div>
-        )}
+                    </li>
+                  ))}
+                </ul>
+              )}
 
-        <div className="mt-4 border-t border-border pt-4">
-          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <Sparkles className="size-3.5" />
-            <span>AI Answers</span>
-            <button
-              type="button"
-              onClick={() => refreshOllama()}
-              disabled={ollamaRefreshing}
-              aria-label="Refresh Ollama models"
-              className="ml-auto rounded p-0.5 hover:bg-accent disabled:opacity-50"
-            >
-              <RefreshCw className={`size-3.5 ${ollamaRefreshing ? "animate-spin" : ""}`} />
-            </button>
-          </div>
-          {ollamaAvailable === false && (
-            <p className="text-xs text-muted-foreground">
-              Ollama not detected. Install and run it locally to enable AI-generated answers.
-            </p>
+              {recentChanges.length > 0 && (
+                <div className="mt-8 border-t border-border pt-6">
+                  <p className="mb-3 text-sm font-medium text-foreground">Recent activity</p>
+                  <ul className="space-y-2">
+                    {recentChanges.map((change, i) => (
+                      <li
+                        key={`${change.path}-${i}`}
+                        className="flex items-center gap-2 truncate text-sm text-muted-foreground"
+                        title={change.path}
+                      >
+                        <span className="rounded bg-accent px-2 py-0.5 text-xs uppercase text-accent-foreground">
+                          {change.kind}
+                        </span>
+                        <span className="truncate">{change.path}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {failures.length > 0 && (
+                <div className="mt-8 border-t border-border pt-6">
+                  <p className="mb-3 flex items-center gap-2 text-sm font-medium text-destructive">
+                    <TriangleAlert className="size-4" />
+                    Couldn't index {failures.length} file{failures.length === 1 ? "" : "s"}
+                  </p>
+                  <ul className="space-y-2">
+                    {failures.map((failure) => (
+                      <li key={failure.path} className="rounded-md border border-border bg-destructive/5 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="truncate text-sm font-medium text-foreground" title={failure.path}>
+                            {failure.fileName}
+                          </span>
+                          {selectedModel && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleExplain(failure)}
+                            >
+                              <Sparkles className="size-4" />
+                              Explain
+                            </Button>
+                          )}
+                        </div>
+                        <p className="mt-1 truncate text-sm text-muted-foreground" title={failure.message}>
+                          {failure.message}
+                        </p>
+                        {explanation?.path === failure.path && (
+                          <div className="mt-2 rounded-md bg-accent px-3 py-2 text-sm text-accent-foreground">
+                            {explanation.error ? (
+                              <span className="text-destructive">{explanation.error}</span>
+                            ) : (
+                              <>
+                                {explanation.text}
+                                {explanation.loading && <LoadingDots />}
+                              </>
+                            )}
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <div className="mt-8 flex gap-3">
+                <Button onClick={handleAddDirectory} className="flex-1">
+                  <FolderPlus />
+                  Add Directory
+                </Button>
+                <Button
+                  onClick={handleAddHomeFolder}
+                  variant="outline"
+                  className="flex-1"
+                  title="Includes Desktop, Documents, Downloads, and every other folder in your home directory"
+                >
+                  <House />
+                  Add Home Folder
+                </Button>
+              </div>
+            </div>
           )}
-          {ollamaAvailable && ollamaModels.length === 0 && (
-            <p className="text-xs text-muted-foreground">
-              Ollama is running, but no models are installed. Run{" "}
-              <code className="rounded bg-accent px-1 py-0.5">ollama pull &lt;model&gt;</code> to
-              add one.
-            </p>
-          )}
-          {ollamaAvailable && ollamaModels.length > 0 && (
+
+          {/* AI Answers Section */}
+          {activeSection === "ai" && (
             <div>
-              <label
-                htmlFor="ollama-model"
-                className="mb-1 block text-xs text-muted-foreground"
-              >
-                Model used for AI answers
-              </label>
-              <select
-                id="ollama-model"
-                value={selectedModel ?? ""}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-sm text-foreground outline-none focus-visible:ring-1 focus-visible:ring-ring"
-              >
-                {ollamaModels.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
+              <h2 className="mb-6 text-2xl font-semibold text-foreground">AI Answers</h2>
+
+              <div className="max-w-2xl rounded-lg border border-border bg-card p-6">
+                <div className="mb-4 flex items-center justify-between">
+                  <p className="text-sm font-medium text-foreground">Ollama Configuration</p>
+                  <button
+                    type="button"
+                    onClick={() => refreshOllama()}
+                    disabled={ollamaRefreshing}
+                    aria-label="Refresh Ollama models"
+                    className="rounded p-1 hover:bg-accent disabled:opacity-50"
+                  >
+                    <RefreshCw className={`size-5 ${ollamaRefreshing ? "animate-spin" : ""}`} />
+                  </button>
+                </div>
+
+                {ollamaAvailable === false && (
+                  <p className="text-sm text-muted-foreground">
+                    Ollama not detected. Install and run it locally to enable AI-generated answers. Visit{" "}
+                    <a
+                      href="https://ollama.com"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-primary underline hover:no-underline"
+                    >
+                      ollama.com
+                    </a>
+                    {" "}to get started.
+                  </p>
+                )}
+                {ollamaAvailable && ollamaModels.length === 0 && (
+                  <p className="text-sm text-muted-foreground">
+                    Ollama is running, but no models are installed. Run{" "}
+                    <code className="rounded bg-muted px-2 py-1 font-mono text-xs">ollama pull &lt;model&gt;</code>{" "}
+                    to add one.
+                  </p>
+                )}
+                {ollamaAvailable && ollamaModels.length > 0 && (
+                  <div>
+                    <label htmlFor="ollama-model" className="mb-2 block text-sm text-foreground">
+                      Select model for AI answers
+                    </label>
+                    <select
+                      id="ollama-model"
+                      value={selectedModel ?? ""}
+                      onChange={(e) => setSelectedModel(e.target.value)}
+                      className="w-full max-w-sm rounded-md border border-input bg-transparent px-4 py-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {ollamaModels.map((model) => (
+                        <option key={model} value={model}>
+                          {model}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* System Settings Section */}
+          {activeSection === "system" && (
+            <div>
+              <h2 className="mb-6 text-2xl font-semibold text-foreground">System Settings</h2>
+
+              <div className="max-w-2xl space-y-6">
+                <div className="rounded-lg border border-border bg-card p-6">
+                  <div className="mb-4 flex items-center gap-3">
+                    <Keyboard className="size-5 text-muted-foreground" />
+                    <h3 className="text-lg font-semibold text-foreground">Global Hotkey</h3>
+                  </div>
+                  <p className="mb-3 text-sm text-muted-foreground">
+                    Press a key combination to set a new shortcut to open OmniSearch.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => setRecordingHotkey(true)}
+                    disabled={recordingHotkey}
+                    className="w-full max-w-sm rounded-md border border-input bg-transparent px-4 py-3 text-left text-sm text-foreground outline-none hover:bg-accent disabled:opacity-50"
+                  >
+                    {recordingHotkey
+                      ? "Press a key combo… (Esc to cancel)"
+                      : hotkey
+                        ? formatShortcut(hotkey)
+                        : "Loading…"}
+                  </button>
+                  {hotkeyError && <p className="mt-2 text-sm text-destructive">{hotkeyError}</p>}
+                </div>
+
+                <div className="rounded-lg border border-border bg-card p-6">
+                  <div className="mb-4 flex items-center gap-3">
+                    <Power className="size-5 text-muted-foreground" />
+                    <h3 className="text-lg font-semibold text-foreground">Startup</h3>
+                  </div>
+                  <label className="flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      checked={autostartEnabled ?? false}
+                      disabled={autostartEnabled === null || autostartBusy}
+                      onChange={handleToggleAutostart}
+                      className="size-5 rounded border-input"
+                    />
+                    <span className="text-sm text-foreground">Launch OmniSearch when you log in</span>
+                  </label>
+                </div>
+
+                <div className="rounded-lg border border-border bg-card p-6">
+                  <div className="mb-4 flex items-center gap-3">
+                    <Sparkles className="size-5 text-muted-foreground" />
+                    <h3 className="text-lg font-semibold text-foreground">Image Indexing</h3>
+                  </div>
+                  <label className="mb-3 flex items-center gap-3">
+                    <input
+                      type="checkbox"
+                      checked={imageExtractionEnabled ?? false}
+                      disabled={imageExtractionEnabled === null || imageExtractionBusy}
+                      onChange={handleToggleImageExtraction}
+                      className="size-5 rounded border-input"
+                    />
+                    <span className="text-sm text-foreground">Extract text from images using OCR</span>
+                  </label>
+                  <p className="text-sm text-muted-foreground">
+                    Requires Tesseract OCR engine.
+                    <Button
+                      onClick={handleInstallTesseract}
+                      variant="ghost"
+                      size="sm"
+                      className="ml-2 h-auto px-2 py-0 text-sm text-primary underline hover:bg-accent"
+                    >
+                      Install Tesseract
+                    </Button>
+                  </p>
+                </div>
+              </div>
             </div>
           )}
         </div>
-
-        <div className="mt-4 border-t border-border pt-4">
-          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <Keyboard className="size-3.5" />
-            <span>Global shortcut</span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setRecordingHotkey(true)}
-            disabled={recordingHotkey}
-            className="w-full rounded-md border border-input bg-transparent px-3 py-1.5 text-left text-sm text-foreground outline-none hover:bg-accent disabled:opacity-50"
-          >
-            {recordingHotkey
-              ? "Press a key combo… (Esc to cancel)"
-              : hotkey
-                ? formatShortcut(hotkey)
-                : "Loading…"}
-          </button>
-          {hotkeyError && <p className="mt-1 text-xs text-destructive">{hotkeyError}</p>}
-        </div>
-
-        <div className="mt-4 border-t border-border pt-4">
-          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <Power className="size-3.5" />
-            <span>Startup</span>
-          </div>
-          <label className="flex items-center gap-2 text-sm text-foreground">
-            <input
-              type="checkbox"
-              checked={autostartEnabled ?? false}
-              disabled={autostartEnabled === null || autostartBusy}
-              onChange={handleToggleAutostart}
-              className="size-4 rounded border-input"
-            />
-            Launch OmniSearch at login
-          </label>
-        </div>
-
-        <div className="mt-4 border-t border-border pt-4">
-          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-            <Sparkles className="size-3.5" />
-            <span>Image Indexing</span>
-          </div>
-          <label className="flex items-center gap-2 text-sm text-foreground">
-            <input
-              type="checkbox"
-              checked={imageExtractionEnabled ?? false}
-              disabled={imageExtractionEnabled === null || imageExtractionBusy}
-              onChange={handleToggleImageExtraction}
-              className="size-4 rounded border-input"
-            />
-            Extract text from images
-          </label>
-          <p className="mt-1.5 text-xs text-muted-foreground">
-            Requires Tesseract.
-            <Button
-              onClick={handleInstallTesseract}
-              variant="ghost"
-              size="sm"
-              className="ml-1 h-auto px-2 py-0 text-xs text-primary underline hover:bg-accent"
-            >
-              Install Tesseract
-            </Button>
-          </p>
-        </div>
-      </div>
-
-      <div className="flex gap-2 border-t border-border p-4">
-        <Button onClick={handleAddDirectory} className="flex-1">
-          <FolderPlus />
-          Add Directory
-        </Button>
-        <Button onClick={handleAddHomeFolder} variant="outline" className="flex-1" title="Includes Desktop, Documents, Downloads, and every other folder in your home directory">
-          <House />
-          Add Home Folder
-        </Button>
       </div>
     </div>
   );
