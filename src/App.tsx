@@ -7,8 +7,7 @@ import { IndexingProvider } from "@/lib/indexing-context";
 import { OllamaProvider } from "@/lib/ollama-context";
 import { applyGlobalShortcut } from "@/lib/hotkey";
 import { DEFAULT_HOTKEY, getGlobalHotkeyPreference } from "@/lib/settings-store";
-import { promptForFilePermissions } from "@/lib/permissions";
-import { ensureStoreInitialized, hasPromptedForPermissions, setPermissionsPrompted } from "@/lib/settings-store";
+import { ensureStoreInitialized } from "@/lib/settings-store";
 
 function App() {
   const [windowLabel, setWindowLabel] = useState<string>("");
@@ -37,14 +36,7 @@ function App() {
         });
       }
 
-      // Only prompt for permissions once, on first launch
-      if (windowLabel === "main") {
-        const alreadyPrompted = await hasPromptedForPermissions();
-        if (!alreadyPrompted) {
-          await setPermissionsPrompted();
-          promptForFilePermissions().catch(() => {});
-        }
-      }
+      // Permissions are now requested on-demand when user adds folders
     })();
   }, [windowLabel]);
 

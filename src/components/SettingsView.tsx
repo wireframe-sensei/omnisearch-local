@@ -27,6 +27,7 @@ import { useOllama } from "@/lib/ollama-context";
 import { cancelOllamaAnswer, streamOllamaAnswer } from "@/lib/ollama";
 import { buildErrorExplanationPrompt } from "@/lib/error-explainer";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { promptForFilePermissions } from "@/lib/permissions";
 import { applyGlobalShortcut, formatShortcut, shortcutFromKeyboardEvent } from "@/lib/hotkey";
 import { getGlobalHotkeyPreference, setGlobalHotkeyPreference, getImageExtractionEnabled, setImageExtractionEnabled } from "@/lib/settings-store";
 import type { IndexFailure } from "@/lib/indexer";
@@ -232,6 +233,9 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   }
 
   async function handleAddDirectory() {
+    // Ask for file permissions before showing file picker
+    await promptForFilePermissions();
+
     const selected = await open({
       directory: true,
       multiple: true,
@@ -244,6 +248,9 @@ export function SettingsView({ onBack }: SettingsViewProps) {
   }
 
   async function handleAddHomeFolder() {
+    // Ask for file permissions before adding home folder
+    await promptForFilePermissions();
+
     // Recursively includes Desktop, Documents, Downloads, etc. - one directory
     // covers all of them without picking each one individually.
     const home = await homeDir();
