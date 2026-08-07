@@ -5,6 +5,7 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::io::Read as IoRead;
 use std::path::Path;
+use std::process::Command;
 use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
 use zip::ZipArchive;
@@ -21,6 +22,7 @@ const PDF_EXTENSIONS: &[&str] = &["pdf"];
 const XLSX_EXTENSIONS: &[&str] = &["xlsx"];
 const DOCX_EXTENSIONS: &[&str] = &["docx"];
 const PPTX_EXTENSIONS: &[&str] = &["pptx"];
+const IMAGE_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "gif", "webp"];
 
 const SKIPPED_DIR_NAMES: &[&str] = &[
     "node_modules",
@@ -87,6 +89,7 @@ pub fn is_supported(path: &Path) -> bool {
                 || XLSX_EXTENSIONS.contains(&ext)
                 || DOCX_EXTENSIONS.contains(&ext)
                 || PPTX_EXTENSIONS.contains(&ext)
+                || IMAGE_EXTENSIONS.contains(&ext)
         })
         .unwrap_or(false)
 }
@@ -245,6 +248,35 @@ fn extract_rtf_text(path: &Path) -> Result<String, String> {
         .map_err(|e| format!("failed to parse RTF {}: {e}", path.display()))
 }
 
+fn extract_image_text(path: &Path) -> Result<String, String> {
+    let path_str = path
+        .to_str()
+        .ok_or_else(|| format!("non-UTF-8 path: {}", path.display()))?;
+
+    // Call the tesseract binary directly. It outputs to stdout by default, or we
+    // can use 'stdout' to write to stdout. `tesseract image.png stdout` prints the text.
+    let output = Command::new("tesseract")
+        .arg(path_str)
+        .arg("stdout")
+        .output()
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                "tesseract binary not found. Install it with: brew install tesseract (macOS), apt install tesseract-ocr (Linux), or choco install tesseract (Windows)".to_string()
+            } else {
+                format!("failed to run tesseract on {}: {e}", path.display())
+            }
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("tesseract failed on {}: {stderr}", path.display()));
+    }
+
+    String::from_utf8(output.stdout)
+        .map(|s| s.trim().to_string())
+        .map_err(|e| format!("tesseract output for {} was not valid UTF-8: {e}", path.display()))
+}
+
 /// Pulls the text content out of every `<local_tag_name>` element in `xml`, ignoring
 /// namespace prefixes (so `w:t`, `a:t`, etc. all match on their local name alone).
 fn extract_xml_text_nodes(xml: &str, local_tag_name: &[u8]) -> String {
@@ -384,6 +416,8 @@ pub fn extract_document_text(path: &str) -> Result<ExtractedDocument, String> {
         extract_docx_text(path_ref)?
     } else if PPTX_EXTENSIONS.contains(&ext) {
         extract_pptx_text(path_ref)?
+    } else if IMAGE_EXTENSIONS.contains(&ext) {
+        extract_image_text(path_ref)?
     } else {
         return Err(format!("unsupported file extension: {ext}"));
     };
